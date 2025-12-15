@@ -35,7 +35,8 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
   file_picker: ^8.1.4
-  record: ^5.1.2
+  record: 5.1.0
+  record_platform_interface: 1.2.0
   permission_handler: ^11.3.1
   path_provider: ^2.1.5
 

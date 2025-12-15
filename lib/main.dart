@@ -855,6 +855,14 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                       _gestationPeriod =
                                           _gestationController.text;
                                       _errorMessage = "";
+
+                                      // Reset audio-related states when continuing assessment
+                                      _audioFilePath = null;
+                                      _audioFileName = null;
+                                      _audioFileBytes = null;
+                                      _isRecording = false;
+                                      _recordingDuration = 0;
+                                      _recordingTimer?.cancel();
                                     }
                                   });
                                 },
