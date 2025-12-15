@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:file_picker/file_picker.dart';
 import 'package:record/record.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:path_provider/path_provider.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -43,8 +44,10 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
   bool _isRecording = false;
   String? _audioFilePath;
   String? _audioFileName;
+  List<int>? _audioFileBytes; // For web platform
   int _recordingDuration = 0;
   Timer? _recordingTimer;
+
 
   @override
   void initState() {
@@ -204,14 +207,14 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
       final fileName = _audioFileName ?? 'recording.m4a';
 
       if (kIsWeb) {
-        // For web, trigger browser download
+        // For web, show informative message
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text(
-                'Download feature is not supported on web. File is already in browser storage.',
+                'Web downloads are saved to your browser\'s download folder automatically.',
               ),
-              backgroundColor: Colors.orange,
+              backgroundColor: Colors.blue,
               duration: Duration(seconds: 3),
             ),
           );
@@ -219,45 +222,116 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
         return;
       }
 
-      // For desktop/mobile, use directory picker
+      // Request storage permission for Android
+      if (Platform.isAndroid) {
+        PermissionStatus permissionStatus;
+
+        // Check Android version and request appropriate permission
+        // For Android 13+ (API 33+), we need manageExternalStorage or use scoped storage
+        // For now, we'll try manageExternalStorage first, then fall back to storage
+
+        // Try to check if permission is permanently denied
+        if (await Permission.manageExternalStorage.isPermanentlyDenied ||
+            await Permission.storage.isPermanentlyDenied) {
+          // Show dialog to user
+          if (mounted) {
+            final shouldOpenSettings = await showDialog<bool>(
+              context: context,
+              builder: (context) => AlertDialog(
+                title: const Text('Permission Required'),
+                content: const Text(
+                  'Storage permission is required to download files. '
+                  'Please enable it in app settings.',
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    child: const Text('Cancel'),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(context, true),
+                    child: const Text('Open Settings'),
+                  ),
+                ],
+              ),
+            );
+
+            if (shouldOpenSettings == true) {
+              await openAppSettings();
+            }
+          }
+          return;
+        }
+
+        // Request manageExternalStorage permission (for Android 11+)
+        permissionStatus = await Permission.manageExternalStorage.request();
+
+        // If manageExternalStorage is denied, try regular storage permission
+        if (!permissionStatus.isGranted) {
+          permissionStatus = await Permission.storage.request();
+        }
+
+        if (!permissionStatus.isGranted) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: const Text(
+                  'Storage permission is required to download files',
+                ),
+                backgroundColor: Colors.red,
+                action: SnackBarAction(
+                  label: 'Settings',
+                  textColor: Colors.white,
+                  onPressed: () => openAppSettings(),
+                ),
+                duration: const Duration(seconds: 5),
+              ),
+            );
+          }
+          return;
+        }
+      }
+
+      // For Android/Desktop - use directory picker
       String? selectedDirectory = await FilePicker.platform.getDirectoryPath();
 
-      if (selectedDirectory != null) {
-        final newPath = '$selectedDirectory${Platform.pathSeparator}$fileName';
-
-        // Copy the file to the selected location
-        final sourceFile = File(_audioFilePath!);
-        await sourceFile.copy(newPath);
-
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                'Audio saved to:\n${newPath.split(Platform.pathSeparator).last}',
-              ),
-              backgroundColor: Colors.green,
-              duration: const Duration(seconds: 3),
-            ),
-          );
-        }
-      } else {
-        // User cancelled the picker
+      if (selectedDirectory == null) {
+        // User cancelled
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text('Download cancelled'),
               backgroundColor: Colors.grey,
-              duration: Duration(seconds: 2),
             ),
           );
         }
+        return;
       }
-    } catch (e) {
-      print('Error downloading file: $e');
+
+      // Copy file to selected directory
+      final sourceFile = File(_audioFilePath!);
+      if (!await sourceFile.exists()) {
+        throw Exception('Source file not found');
+      }
+
+      final newPath = '$selectedDirectory${Platform.pathSeparator}$fileName';
+      await sourceFile.copy(newPath);
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error saving file: ${e.toString()}'),
+            content: Text('✓ Audio saved successfully!\n$fileName'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      print('Download error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to save file: ${e.toString()}'),
             backgroundColor: Colors.red,
             duration: const Duration(seconds: 3),
           ),
@@ -268,19 +342,153 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
 
   Future<void> _pickAudioFile() async {
     try {
+      // Use FileType.any with allowed extensions to avoid Android emulator issues
+      // FileType.audio doesn't work well on emulators
       FilePickerResult? result = await FilePicker.platform.pickFiles(
-        type: FileType.audio,
+        type: FileType.custom,
+        allowedExtensions: ['mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac', '3gp', 'amr'],
         allowMultiple: false,
+        withData: true, // Load bytes into memory immediately
       );
 
-      if (result != null && result.files.single.path != null) {
-        setState(() {
-          _audioFilePath = result.files.single.path;
-          _audioFileName = result.files.single.name;
-        });
+      if (result != null && result.files.isNotEmpty) {
+        final pickedFile = result.files.single;
+
+        // Validate file extension
+        final fileName = pickedFile.name.toLowerCase();
+        final validExtensions = ['mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac', '3gp', 'amr'];
+        final hasValidExtension = validExtensions.any((ext) => fileName.endsWith('.$ext'));
+
+        if (!hasValidExtension) {
+          throw Exception('Invalid file type. Please select an audio file (.mp3, .wav, .m4a, etc.)');
+        }
+
+        // Handle web platform differently (no File operations)
+        if (kIsWeb) {
+          if (pickedFile.bytes != null && pickedFile.bytes!.isNotEmpty) {
+            setState(() {
+              _audioFileBytes = pickedFile.bytes!;
+              _audioFileName = pickedFile.name;
+              _audioFilePath = pickedFile.name; // Just store name for display
+            });
+
+            print('✓ File loaded for web: ${pickedFile.name}');
+            print('✓ File size: ${pickedFile.bytes!.length} bytes');
+
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('✓ Selected: ${pickedFile.name} (${(pickedFile.bytes!.length / 1024).toStringAsFixed(1)} KB)'),
+                  backgroundColor: const Color(0xFF10B981),
+                  duration: const Duration(seconds: 2),
+                ),
+              );
+            }
+          } else {
+            throw Exception('No file data available for web platform');
+          }
+          return; // Exit early for web
+        }
+
+        // For mobile/desktop: Copy to temp directory
+        try {
+          final tempDir = await getTemporaryDirectory();
+          final timestamp = DateTime.now().millisecondsSinceEpoch;
+          final tempFileName = pickedFile.name;
+          final tempFile = File('${tempDir.path}/upload_$timestamp\_$tempFileName');
+
+          // Priority: Use bytes (loaded via withData: true)
+          if (pickedFile.bytes != null && pickedFile.bytes!.isNotEmpty) {
+            // Method 1: Use bytes - Most reliable for Android
+            await tempFile.writeAsBytes(pickedFile.bytes!);
+            print('✓ File loaded using bytes method (${pickedFile.bytes!.length} bytes)');
+          } else if (pickedFile.path != null && pickedFile.path!.isNotEmpty) {
+            // Method 2: Fallback to path copy for desktop/older Android
+            final sourceFile = File(pickedFile.path!);
+            if (await sourceFile.exists()) {
+              final bytes = await sourceFile.readAsBytes();
+              await tempFile.writeAsBytes(bytes);
+              print('✓ File loaded from path: ${pickedFile.path}');
+            } else {
+              throw Exception('Source file not accessible at: ${pickedFile.path}');
+            }
+          } else {
+            throw Exception('No file data available. Please try a different file.');
+          }
+
+          // Verify the file was created and has content
+          if (await tempFile.exists()) {
+            final fileSize = await tempFile.length();
+            print('✓ Temp file created: ${tempFile.path}');
+            print('✓ File size: $fileSize bytes (${(fileSize / 1024).toStringAsFixed(2)} KB)');
+
+            if (fileSize > 0) {
+              setState(() {
+                _audioFilePath = tempFile.path;
+                _audioFileName = tempFileName;
+              });
+
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('✓ Selected: $tempFileName (${(fileSize / 1024).toStringAsFixed(1)} KB)'),
+                    backgroundColor: const Color(0xFF10B981),
+                    duration: const Duration(seconds: 2),
+                  ),
+                );
+              }
+            } else {
+              throw Exception('File is empty (0 bytes)');
+            }
+          } else {
+            throw Exception('Failed to create temp file');
+          }
+        } catch (e) {
+          print('❌ Error copying file to temp: $e');
+          throw Exception('Failed to process file: $e');
+        }
+      } else {
+        print('No file selected or file list is empty');
       }
     } catch (e) {
-      print('Error picking file: $e');
+      print('❌ Error picking file: $e');
+      if (mounted) {
+        String errorMsg = e.toString();
+
+        // Make error messages user-friendly
+        if (errorMsg.contains('file type') && errorMsg.contains('null')) {
+          errorMsg = 'File picker error. Please try selecting from your Downloads or Music folder.';
+        } else if (errorMsg.contains('Invalid file type')) {
+          errorMsg = errorMsg.split(':').last.trim();
+        } else if (errorMsg.contains('namespace')) {
+          errorMsg = 'File access error. Try selecting from Downloads or Music folder.';
+        } else if (errorMsg.contains('permission')) {
+          errorMsg = 'Storage permission denied. Grant permission in Settings and retry.';
+        } else if (errorMsg.contains('empty')) {
+          errorMsg = 'Selected file is empty (0 bytes). Choose a valid audio file.';
+        } else if (errorMsg.contains('instance') || errorMsg.contains('not been loaded')) {
+          errorMsg = 'File loading error. Try selecting a different file or restart the app.';
+        } else if (errorMsg.contains('not accessible')) {
+          errorMsg = 'Cannot access file. Try copying it to Downloads folder first.';
+        } else {
+          // Extract the actual error message
+          final parts = errorMsg.split(':');
+          errorMsg = 'Could not load file: ${parts.length > 1 ? parts.last.trim() : errorMsg}';
+        }
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(errorMsg),
+            backgroundColor: const Color(0xFFDC2626),
+            duration: const Duration(seconds: 5),
+            action: SnackBarAction(
+              label: 'Retry',
+              textColor: Colors.white,
+              onPressed: () => _pickAudioFile(),
+            ),
+          ),
+        );
+      }
     }
   }
 
@@ -290,109 +498,190 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
       appBar: _isLoading
           ? null
           : AppBar(
-              backgroundColor: Colors.white,
-              title: const Text(
-                "GarbhSuraksha",
-                style: TextStyle(color: Colors.blue),
+              backgroundColor: const Color(0xFF2C6E91),
+              title: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(
+                      Icons.favorite,
+                      color: Color(0xFF2C6E91),
+                      size: 20,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  const Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        "GarbhSuraksha",
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      Text(
+                        "Maternal Health Monitoring",
+                        style: TextStyle(
+                          color: Colors.white70,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w400,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ),
-              elevation: 0,
+              elevation: 2,
             ),
       drawer: _isLoading
           ? null
           : Drawer(
               child: Column(
                 children: [
-                  DrawerHeader(
-                    decoration: BoxDecoration(
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 40,
+                      horizontal: 20,
+                    ),
+                    decoration: const BoxDecoration(
                       gradient: LinearGradient(
-                        colors: [Colors.blue[400]!, Colors.blue[200]!],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
+                        colors: [Color(0xFF2C6E91), Color(0xFF4A90B5)],
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
                       ),
                     ),
-                    child: const Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
+                    child: Column(
                       children: [
-                        CircleAvatar(
-                          radius: 40,
-                          backgroundColor: Colors.white,
-                          child: Icon(
-                            Icons.pregnant_woman_outlined,
-                            size: 60,
-                            color: Colors.blue,
+                        Container(
+                          padding: const EdgeInsets.all(15),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white, width: 3),
+                          ),
+                          child: const Icon(
+                            Icons.pregnant_woman,
+                            size: 50,
+                            color: Color(0xFF2C6E91),
                           ),
                         ),
-                        SizedBox(height: 10),
-                        Text(
+                        const SizedBox(height: 15),
+                        const Text(
                           "GarbhSuraksha",
                           style: TextStyle(
                             color: Colors.white,
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
+                            fontSize: 22,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                        const SizedBox(height: 5),
+                        const Text(
+                          "Fetal Monitoring System",
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w400,
                           ),
                         ),
                       ],
                     ),
                   ),
+                  const SizedBox(height: 10),
                   ListTile(
-                    leading: const Icon(Icons.home, color: Colors.blue),
-                    title: const Text("Home"),
+                    leading: const Icon(
+                      Icons.dashboard_outlined,
+                      color: Color(0xFF2C6E91),
+                    ),
+                    title: const Text(
+                      "Dashboard",
+                      style: TextStyle(fontWeight: FontWeight.w500),
+                    ),
                     onTap: () {
                       Navigator.pop(context);
                     },
                   ),
-                  const Divider(),
+                  const Divider(height: 1),
                   ListTile(
-                    leading: const Icon(Icons.person, color: Colors.blue),
-                    title: const Text("Profile"),
+                    leading: const Icon(
+                      Icons.calendar_today_outlined,
+                      color: Color(0xFF2C6E91),
+                    ),
+                    title: const Text(
+                      "Appointments",
+                      style: TextStyle(fontWeight: FontWeight.w500),
+                    ),
                     onTap: () {
                       Navigator.pop(context);
                     },
                   ),
                   ListTile(
                     leading: const Icon(
-                      Icons.calendar_today,
-                      color: Colors.blue,
+                      Icons.medical_services_outlined,
+                      color: Color(0xFF2C6E91),
                     ),
-                    title: const Text("Appointments"),
+                    title: const Text(
+                      "Medical Records",
+                      style: TextStyle(fontWeight: FontWeight.w500),
+                    ),
                     onTap: () {
                       Navigator.pop(context);
                     },
                   ),
                   ListTile(
                     leading: const Icon(
-                      Icons.medical_services,
-                      color: Colors.blue,
+                      Icons.notifications_outlined,
+                      color: Color(0xFF2C6E91),
                     ),
-                    title: const Text("Health Records"),
+                    title: const Text(
+                      "Reminders",
+                      style: TextStyle(fontWeight: FontWeight.w500),
+                    ),
+                    onTap: () {
+                      Navigator.pop(context);
+                    },
+                  ),
+                  const Divider(height: 1),
+                  ListTile(
+                    leading: const Icon(
+                      Icons.settings_outlined,
+                      color: Color(0xFF2C6E91),
+                    ),
+                    title: const Text(
+                      "Settings",
+                      style: TextStyle(fontWeight: FontWeight.w500),
+                    ),
                     onTap: () {
                       Navigator.pop(context);
                     },
                   ),
                   ListTile(
                     leading: const Icon(
-                      Icons.notifications,
-                      color: Colors.blue,
+                      Icons.help_outline,
+                      color: Color(0xFF2C6E91),
                     ),
-                    title: const Text("Reminders"),
+                    title: const Text(
+                      "Help & Support",
+                      style: TextStyle(fontWeight: FontWeight.w500),
+                    ),
                     onTap: () {
                       Navigator.pop(context);
                     },
                   ),
-                  const Divider(),
-                  ListTile(
-                    leading: const Icon(Icons.settings, color: Colors.blue),
-                    title: const Text("Settings"),
-                    onTap: () {
-                      Navigator.pop(context);
-                    },
-                  ),
-                  ListTile(
-                    leading: const Icon(Icons.info, color: Colors.blue),
-                    title: const Text("About"),
-                    onTap: () {
-                      Navigator.pop(context);
-                    },
+                  const Spacer(),
+                  const Padding(
+                    padding: EdgeInsets.all(20.0),
+                    child: Text(
+                      "Version 1.0.0",
+                      style: TextStyle(color: Colors.grey, fontSize: 12),
+                    ),
                   ),
                 ],
               ),
@@ -402,383 +691,421 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
           // Main Content (Form Screen)
           if (!_isLoading)
             Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [Colors.blue[50]!, Colors.white],
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                ),
-              ),
+              decoration: const BoxDecoration(color: Color(0xFFF5F8FA)),
               child: Center(
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.all(24.0),
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      // Icon Container
+                      // Professional Medical Icon
                       Container(
-                        height: 120,
-                        width: 120,
+                        height: 100,
+                        width: 100,
                         decoration: BoxDecoration(
-                          color: Colors.white,
+                          color: const Color(0xFF2C6E91),
                           shape: BoxShape.circle,
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.blue.withValues(alpha: 0.3),
-                              spreadRadius: 3,
-                              blurRadius: 10,
-                              offset: const Offset(0, 5),
+                              color: Colors.black.withValues(alpha: 0.1),
+                              spreadRadius: 1,
+                              blurRadius: 8,
+                              offset: const Offset(0, 2),
                             ),
                           ],
                         ),
                         child: const Icon(
-                          Icons.pregnant_woman,
-                          size: 70,
-                          color: Colors.blue,
+                          Icons.monitor_heart,
+                          size: 55,
+                          color: Colors.white,
                         ),
                       ),
-                      const SizedBox(height: 30),
-                      // Title
+                      const SizedBox(height: 25),
+                      // Clinical Title
                       const Text(
-                        "Gestation Period",
+                        "Smart Fetal Heart Rate Monitor",
                         style: TextStyle(
-                          fontSize: 28,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.blue,
-                          letterSpacing: 0.5,
+                          fontSize: 24,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF1A1A1A),
+                          letterSpacing: 0.3,
                         ),
                       ),
-                      const SizedBox(height: 10),
+                      const SizedBox(height: 8),
                       const Text(
-                        "Please enter your current gestation period",
-                        style: TextStyle(fontSize: 16, color: Colors.grey),
+                        "Enter current gestational week for fetal heart rate monitoring",
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Color(0xFF6B7280),
+                          fontWeight: FontWeight.w400,
+                        ),
+                        textAlign: TextAlign.center,
                       ),
-                      const SizedBox(height: 40),
+                      const SizedBox(height: 35),
                       // Input Card
                       Container(
-                        padding: const EdgeInsets.all(30),
+                        padding: const EdgeInsets.all(28),
                         decoration: BoxDecoration(
                           color: Colors.white,
-                          borderRadius: BorderRadius.circular(25),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: const Color(0xFFE5E7EB),
+                            width: 1,
+                          ),
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.blue.withValues(alpha: 0.2),
-                              spreadRadius: 3,
-                              blurRadius: 15,
-                              offset: const Offset(0, 5),
+                              color: Colors.black.withValues(alpha: 0.05),
+                              spreadRadius: 0,
+                              blurRadius: 10,
+                              offset: const Offset(0, 2),
                             ),
                           ],
                         ),
                         child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
+                            const Text(
+                              "Gestational Week",
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xFF374151),
+                                letterSpacing: 0.3,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
                             TextField(
                               controller: _gestationController,
                               keyboardType: TextInputType.number,
-                              textAlign: TextAlign.center,
                               style: const TextStyle(
-                                fontSize: 24,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.blue,
+                                fontSize: 18,
+                                fontWeight: FontWeight.w500,
+                                color: Color(0xFF1F2937),
                               ),
                               decoration: InputDecoration(
                                 hintText: "Enter weeks (5-42)",
-                                hintStyle: TextStyle(
-                                  color: Colors.grey[400],
+                                hintStyle: const TextStyle(
+                                  color: Color(0xFF9CA3AF),
                                   fontSize: 16,
+                                  fontWeight: FontWeight.w400,
                                 ),
                                 prefixIcon: const Icon(
-                                  Icons.calendar_month,
-                                  color: Colors.blue,
-                                  size: 30,
+                                  Icons.event_note,
+                                  color: Color(0xFF2C6E91),
+                                  size: 24,
                                 ),
                                 suffixText: "weeks",
                                 suffixStyle: const TextStyle(
-                                  color: Colors.blue,
-                                  fontSize: 18,
+                                  color: Color(0xFF6B7280),
+                                  fontSize: 16,
                                   fontWeight: FontWeight.w500,
                                 ),
                                 border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(15),
-                                  borderSide: BorderSide(
-                                    color: Colors.blue[200]!,
-                                    width: 2,
+                                  borderRadius: BorderRadius.circular(8),
+                                  borderSide: const BorderSide(
+                                    color: Color(0xFFD1D5DB),
+                                    width: 1.5,
                                   ),
                                 ),
                                 enabledBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(15),
-                                  borderSide: BorderSide(
-                                    color: Colors.blue[200]!,
-                                    width: 2,
+                                  borderRadius: BorderRadius.circular(8),
+                                  borderSide: const BorderSide(
+                                    color: Color(0xFFD1D5DB),
+                                    width: 1.5,
                                   ),
                                 ),
                                 focusedBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(15),
+                                  borderRadius: BorderRadius.circular(8),
                                   borderSide: const BorderSide(
-                                    color: Colors.blue,
-                                    width: 2.5,
+                                    color: Color(0xFF2C6E91),
+                                    width: 2,
                                   ),
                                 ),
                                 filled: true,
-                                fillColor: Colors.blue[50],
+                                fillColor: const Color(0xFFF9FAFB),
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 14,
+                                ),
                               ),
                             ),
-                            const SizedBox(height: 25),
+                            const SizedBox(height: 24),
                             // Submit Button
-                            ElevatedButton(
-                              onPressed: () {
-                                setState(() {
-                                  int? weeks = int.tryParse(
-                                    _gestationController.text,
-                                  );
-                                  if (weeks == null) {
-                                    _errorMessage =
-                                        "Please enter a valid number";
-                                    _gestationPeriod = "";
-                                  } else if (weeks > 42) {
-                                    _errorMessage =
-                                        "You cannot be pregnant for more than 42 weeks";
-                                    _gestationPeriod = "";
-                                  } else if (weeks < 5) {
-                                    _errorMessage =
-                                        "Heart of the fetus requires atleast a minimum of 6 weeks to devolop and function properly.";
-                                    _gestationPeriod = "";
-                                  } else {
-                                    _gestationPeriod =
-                                        _gestationController.text;
-                                    _errorMessage = "";
-                                  }
-                                });
-                              },
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.blue,
-                                foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 50,
-                                  vertical: 18,
-                                ),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(30),
-                                ),
-                                elevation: 5,
-                                shadowColor: Colors.blue.withValues(alpha: 0.5),
-                              ),
-                              child: const Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text(
-                                    "Submit",
-                                    style: TextStyle(
-                                      fontSize: 20,
-                                      fontWeight: FontWeight.bold,
-                                      letterSpacing: 1,
-                                    ),
+                            SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton(
+                                onPressed: () {
+                                  setState(() {
+                                    int? weeks = int.tryParse(
+                                      _gestationController.text,
+                                    );
+                                    if (weeks == null) {
+                                      _errorMessage =
+                                          "Please enter a valid number";
+                                      _gestationPeriod = "";
+                                    } else if (weeks > 42) {
+                                      _errorMessage =
+                                          "Gestational age cannot exceed 42 weeks";
+                                      _gestationPeriod = "";
+                                    } else if (weeks < 5) {
+                                      _errorMessage =
+                                          "Fetal heart requires minimum 6 weeks to develop";
+                                      _gestationPeriod = "";
+                                    } else {
+                                      _gestationPeriod =
+                                          _gestationController.text;
+                                      _errorMessage = "";
+                                    }
+                                  });
+                                },
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF2C6E91),
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 16,
                                   ),
-                                  SizedBox(width: 10),
-                                  Icon(Icons.arrow_forward_rounded),
-                                ],
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  elevation: 0,
+                                ),
+                                child: const Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Text(
+                                      "Continue Assessment",
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w600,
+                                        letterSpacing: 0.3,
+                                      ),
+                                    ),
+                                    SizedBox(width: 8),
+                                    Icon(Icons.arrow_forward, size: 18),
+                                  ],
+                                ),
                               ),
                             ),
                           ],
                         ),
                       ),
-                      const SizedBox(height: 30),
+                      const SizedBox(height: 24),
                       // Display Error Message
                       if (_errorMessage.isNotEmpty)
-                        AnimatedOpacity(
-                          opacity: 1.0,
-                          duration: const Duration(milliseconds: 500),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 30,
-                              vertical: 20,
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFEF2F2),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: const Color(0xFFEF4444),
+                              width: 1,
                             ),
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                colors: [Colors.red[400]!, Colors.red[300]!],
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(
+                                Icons.warning_amber_rounded,
+                                color: Color(0xFFDC2626),
+                                size: 22,
                               ),
-                              borderRadius: BorderRadius.circular(20),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.red.withValues(alpha: 0.4),
-                                  spreadRadius: 2,
-                                  blurRadius: 10,
-                                  offset: const Offset(0, 4),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      "Validation Error",
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w600,
+                                        color: Color(0xFF991B1B),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      _errorMessage,
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        color: Color(0xFF991B1B),
+                                        height: 1.4,
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                              ],
-                            ),
-                            child: Column(
-                              children: [
-                                const Icon(
-                                  Icons.error_outline,
-                                  color: Colors.white,
-                                  size: 40,
-                                ),
-                                const SizedBox(height: 10),
-                                const Text(
-                                  "Invalid Input",
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                                const SizedBox(height: 5),
-                                Text(
-                                  _errorMessage,
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold,
-                                    letterSpacing: 0.5,
-                                  ),
-                                ),
-                              ],
-                            ),
+                              ),
+                            ],
                           ),
                         ),
                       // Display Result
                       if (_gestationPeriod.isNotEmpty)
-                        AnimatedOpacity(
-                          opacity: 1.0,
-                          duration: const Duration(milliseconds: 500),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 30,
-                              vertical: 20,
-                            ),
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                colors: [Colors.blue[400]!, Colors.blue[300]!],
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                              ),
-                              borderRadius: BorderRadius.circular(20),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.blue.withValues(alpha: 0.4),
-                                  spreadRadius: 2,
-                                  blurRadius: 10,
-                                  offset: const Offset(0, 4),
-                                ),
-                              ],
-                            ),
-                            child: Column(
-                              children: [
-                                const Icon(
-                                  Icons.check_circle_outline,
-                                  color: Colors.white,
-                                  size: 40,
-                                ),
-                                const SizedBox(height: 10),
-                                const Text(
-                                  "Current Gestation Period",
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                                const SizedBox(height: 5),
-                                Text(
-                                  "$_gestationPeriod Weeks",
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 32,
-                                    fontWeight: FontWeight.bold,
-                                    letterSpacing: 1,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      // Audio Upload Section (shows after valid gestation period)
-                      if (_gestationPeriod.isNotEmpty)
-                        const SizedBox(height: 30),
-                      if (_gestationPeriod.isNotEmpty)
                         Container(
-                          padding: const EdgeInsets.all(30),
+                          padding: const EdgeInsets.all(20),
                           decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(25),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.purple.withValues(alpha: 0.2),
-                                spreadRadius: 3,
-                                blurRadius: 15,
-                                offset: const Offset(0, 5),
-                              ),
-                            ],
+                            color: const Color(0xFFECFDF5),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: const Color(0xFF10B981),
+                              width: 1,
+                            ),
                           ),
                           child: Column(
                             children: [
-                              // Title
                               Row(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  Icon(
-                                    Icons.audio_file,
-                                    color: Colors.purple[400],
-                                    size: 30,
+                                  Container(
+                                    padding: const EdgeInsets.all(8),
+                                    decoration: const BoxDecoration(
+                                      color: Color(0xFF10B981),
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: const Icon(
+                                      Icons.check,
+                                      color: Colors.white,
+                                      size: 20,
+                                    ),
                                   ),
-                                  const SizedBox(width: 10),
-                                  Text(
-                                    "Upload Fetal Audio",
+                                  const SizedBox(width: 12),
+                                  const Text(
+                                    "Assessment Confirmed",
                                     style: TextStyle(
-                                      fontSize: 22,
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.purple[700],
-                                      letterSpacing: 0.5,
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                      color: Color(0xFF065F46),
                                     ),
                                   ),
                                 ],
                               ),
-                              const SizedBox(height: 10),
-                              const Text(
-                                "Record or upload fetal heartbeat audio",
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: Colors.grey,
+                              const SizedBox(height: 16),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 20,
+                                  vertical: 12,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(
+                                    color: const Color(0xFF10B981),
+                                    width: 1,
+                                  ),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Text(
+                                      "Current Gestation:",
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        color: Color(0xFF6B7280),
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      "$_gestationPeriod Weeks",
+                                      style: const TextStyle(
+                                        fontSize: 20,
+                                        fontWeight: FontWeight.w700,
+                                        color: Color(0xFF065F46),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
-                              const SizedBox(height: 25),
+                            ],
+                          ),
+                        ),
+                      // Audio Upload Section (shows after valid gestation period)
+                      if (_gestationPeriod.isNotEmpty)
+                        const SizedBox(height: 28),
+                      if (_gestationPeriod.isNotEmpty)
+                        Container(
+                          padding: const EdgeInsets.all(24),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: const Color(0xFFE5E7EB),
+                              width: 1,
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.05),
+                                spreadRadius: 0,
+                                blurRadius: 10,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // Section Header
+                              Row(
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.all(10),
+                                    decoration: BoxDecoration(
+                                      color: const Color(
+                                        0xFF2C6E91,
+                                      ).withValues(alpha: 0.1),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: const Icon(
+                                      Icons.graphic_eq,
+                                      color: Color(0xFF2C6E91),
+                                      size: 24,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 14),
+                                  const Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          "Fetal Heart Sound Recording",
+                                          style: TextStyle(
+                                            fontSize: 17,
+                                            fontWeight: FontWeight.w600,
+                                            color: Color(0xFF1A1A1A),
+                                            letterSpacing: 0.2,
+                                          ),
+                                        ),
+                                        SizedBox(height: 4),
+                                        Text(
+                                          "Record or upload fetal heartbeat audio",
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            color: Color(0xFF6B7280),
+                                            fontWeight: FontWeight.w400,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 24),
 
                               // Recording Animation and Timer - Shows when recording
                               if (_isRecording)
                                 Container(
                                   margin: const EdgeInsets.only(bottom: 20),
-                                  padding: const EdgeInsets.all(25),
+                                  padding: const EdgeInsets.all(20),
                                   decoration: BoxDecoration(
-                                    gradient: LinearGradient(
-                                      colors: [
-                                        Colors.red[50]!,
-                                        Colors.red[100]!,
-                                      ],
-                                      begin: Alignment.topLeft,
-                                      end: Alignment.bottomRight,
-                                    ),
-                                    borderRadius: BorderRadius.circular(20),
+                                    color: const Color(0xFFFEF2F2),
+                                    borderRadius: BorderRadius.circular(10),
                                     border: Border.all(
-                                      color: Colors.red[400]!,
-                                      width: 2,
+                                      color: const Color(0xFFEF4444),
+                                      width: 1.5,
                                     ),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.red.withValues(
-                                          alpha: 0.3,
-                                        ),
-                                        spreadRadius: 2,
-                                        blurRadius: 8,
-                                        offset: const Offset(0, 3),
-                                      ),
-                                    ],
                                   ),
                                   child: Column(
                                     children: [
-                                      // Recording Animation
+                                      // Recording Status
                                       Row(
                                         mainAxisAlignment:
                                             MainAxisAlignment.center,
@@ -791,21 +1118,23 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                             ),
                                             builder: (context, value, child) {
                                               return Container(
-                                                width: 16,
-                                                height: 16,
+                                                width: 12,
+                                                height: 12,
                                                 decoration: BoxDecoration(
-                                                  color: Colors.red.withValues(
-                                                    alpha: value,
-                                                  ),
+                                                  color: const Color(
+                                                    0xFFDC2626,
+                                                  ).withValues(alpha: value),
                                                   shape: BoxShape.circle,
                                                   boxShadow: [
                                                     BoxShadow(
-                                                      color: Colors.red
-                                                          .withValues(
-                                                            alpha: value * 0.5,
+                                                      color:
+                                                          const Color(
+                                                            0xFFDC2626,
+                                                          ).withValues(
+                                                            alpha: value * 0.4,
                                                           ),
                                                       spreadRadius: 2,
-                                                      blurRadius: 8,
+                                                      blurRadius: 6,
                                                     ),
                                                   ],
                                                 ),
@@ -817,52 +1146,58 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                               }
                                             },
                                           ),
-                                          const SizedBox(width: 12),
-                                          Text(
-                                            "Recording in Progress...",
+                                          const SizedBox(width: 10),
+                                          const Text(
+                                            "Recording in Progress",
                                             style: TextStyle(
-                                              color: Colors.red[900],
-                                              fontSize: 16,
-                                              fontWeight: FontWeight.bold,
+                                              color: Color(0xFF991B1B),
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w600,
                                             ),
                                           ),
                                         ],
                                       ),
-                                      const SizedBox(height: 20),
-                                      // Large Timer Display
+                                      const SizedBox(height: 16),
+                                      // Timer Display
                                       Container(
                                         padding: const EdgeInsets.symmetric(
-                                          horizontal: 20,
+                                          horizontal: 18,
                                           vertical: 10,
                                         ),
                                         decoration: BoxDecoration(
                                           color: Colors.white,
                                           borderRadius: BorderRadius.circular(
-                                            15,
+                                            8,
+                                          ),
+                                          border: Border.all(
+                                            color: const Color(0xFFE5E7EB),
+                                            width: 1,
                                           ),
                                         ),
                                         child: Text(
                                           "${_recordingDuration}s / 30s",
-                                          style: TextStyle(
-                                            fontSize: 28,
-                                            fontWeight: FontWeight.bold,
-                                            color: Colors.red[700],
-                                            letterSpacing: 1,
+                                          style: const TextStyle(
+                                            fontSize: 22,
+                                            fontWeight: FontWeight.w700,
+                                            color: Color(0xFF991B1B),
+                                            letterSpacing: 0.5,
                                           ),
                                         ),
                                       ),
-                                      const SizedBox(height: 15),
+                                      const SizedBox(height: 14),
                                       // Progress Bar
                                       ClipRRect(
-                                        borderRadius: BorderRadius.circular(10),
+                                        borderRadius: BorderRadius.circular(6),
                                         child: LinearProgressIndicator(
                                           value: _recordingDuration / 30,
-                                          backgroundColor: Colors.red[200],
+                                          backgroundColor: const Color(
+                                            0xFFE5E7EB,
+                                          ),
                                           valueColor:
-                                              AlwaysStoppedAnimation<Color>(
-                                                Colors.red[700]!,
-                                              ),
-                                          minHeight: 10,
+                                              const AlwaysStoppedAnimation<
+                                                Color
+                                              >(Color(0xFFDC2626)),
+                                          minHeight: 8,
                                         ),
                                       ),
                                     ],
@@ -880,35 +1215,35 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                           : _startRecording,
                                       icon: Icon(
                                         _isRecording
-                                            ? Icons.stop_circle
-                                            : Icons.mic,
-                                        size: 24,
+                                            ? Icons.stop_circle_outlined
+                                            : Icons.mic_none,
+                                        size: 22,
                                       ),
                                       label: Text(
-                                        _isRecording ? "Stop" : "Record",
+                                        _isRecording ? "Stop" : "Record Audio",
                                         style: const TextStyle(
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.bold,
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.w600,
                                         ),
                                       ),
                                       style: ElevatedButton.styleFrom(
                                         backgroundColor: _isRecording
-                                            ? Colors.red[600]
-                                            : Colors.purple[600],
+                                            ? const Color(0xFFDC2626)
+                                            : const Color(0xFF2C6E91),
                                         foregroundColor: Colors.white,
                                         padding: const EdgeInsets.symmetric(
-                                          vertical: 16,
+                                          vertical: 14,
                                         ),
                                         shape: RoundedRectangleBorder(
                                           borderRadius: BorderRadius.circular(
-                                            15,
+                                            8,
                                           ),
                                         ),
-                                        elevation: 4,
+                                        elevation: 0,
                                       ),
                                     ),
                                   ),
-                                  const SizedBox(width: 15),
+                                  const SizedBox(width: 12),
                                   // Upload Button
                                   Expanded(
                                     child: OutlinedButton.icon(
@@ -917,30 +1252,34 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                           : _pickAudioFile,
                                       icon: const Icon(
                                         Icons.upload_file,
-                                        size: 24,
+                                        size: 22,
                                       ),
                                       label: const Text(
-                                        "Upload",
+                                        "Upload File",
                                         style: TextStyle(
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.bold,
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.w600,
                                         ),
                                       ),
                                       style: OutlinedButton.styleFrom(
-                                        foregroundColor: Colors.purple[600],
-                                        disabledForegroundColor: Colors.grey,
+                                        foregroundColor: const Color(
+                                          0xFF2C6E91,
+                                        ),
+                                        disabledForegroundColor: const Color(
+                                          0xFF9CA3AF,
+                                        ),
                                         padding: const EdgeInsets.symmetric(
-                                          vertical: 16,
+                                          vertical: 14,
                                         ),
                                         side: BorderSide(
                                           color: _isRecording
-                                              ? Colors.grey[300]!
-                                              : Colors.purple[600]!,
-                                          width: 2,
+                                              ? const Color(0xFFE5E7EB)
+                                              : const Color(0xFF2C6E91),
+                                          width: 1.5,
                                         ),
                                         shape: RoundedRectangleBorder(
                                           borderRadius: BorderRadius.circular(
-                                            15,
+                                            8,
                                           ),
                                         ),
                                       ),
@@ -952,45 +1291,52 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                               if (_audioFileName != null) ...[
                                 const SizedBox(height: 20),
                                 Container(
-                                  padding: const EdgeInsets.all(15),
+                                  padding: const EdgeInsets.all(18),
                                   decoration: BoxDecoration(
-                                    color: Colors.purple[50],
-                                    borderRadius: BorderRadius.circular(15),
+                                    color: const Color(0xFFECFDF5),
+                                    borderRadius: BorderRadius.circular(8),
                                     border: Border.all(
-                                      color: Colors.purple[200]!,
-                                      width: 1.5,
+                                      color: const Color(0xFF10B981),
+                                      width: 1,
                                     ),
                                   ),
                                   child: Column(
                                     children: [
                                       Row(
                                         children: [
-                                          Icon(
-                                            Icons.check_circle,
-                                            color: Colors.purple[600],
-                                            size: 24,
+                                          Container(
+                                            padding: const EdgeInsets.all(8),
+                                            decoration: const BoxDecoration(
+                                              color: Color(0xFF10B981),
+                                              shape: BoxShape.circle,
+                                            ),
+                                            child: const Icon(
+                                              Icons.library_music,
+                                              color: Colors.white,
+                                              size: 20,
+                                            ),
                                           ),
-                                          const SizedBox(width: 10),
+                                          const SizedBox(width: 12),
                                           Expanded(
                                             child: Column(
                                               crossAxisAlignment:
                                                   CrossAxisAlignment.start,
                                               children: [
                                                 const Text(
-                                                  "Audio File Selected:",
+                                                  "Audio File Ready",
                                                   style: TextStyle(
-                                                    fontSize: 12,
-                                                    color: Colors.grey,
-                                                    fontWeight: FontWeight.w500,
+                                                    fontSize: 13,
+                                                    color: Color(0xFF065F46),
+                                                    fontWeight: FontWeight.w600,
                                                   ),
                                                 ),
                                                 const SizedBox(height: 4),
                                                 Text(
                                                   _audioFileName!,
-                                                  style: TextStyle(
+                                                  style: const TextStyle(
                                                     fontSize: 14,
-                                                    fontWeight: FontWeight.bold,
-                                                    color: Colors.purple[700],
+                                                    fontWeight: FontWeight.w500,
+                                                    color: Color(0xFF065F46),
                                                   ),
                                                   overflow:
                                                       TextOverflow.ellipsis,
@@ -1000,36 +1346,247 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                           ),
                                         ],
                                       ),
-                                      const SizedBox(height: 15),
-                                      // Download Button
-                                      SizedBox(
-                                        width: double.infinity,
-                                        child: ElevatedButton.icon(
-                                          onPressed: _downloadAudioFile,
-                                          icon: const Icon(
-                                            Icons.download,
-                                            size: 20,
-                                          ),
-                                          label: const Text(
-                                            "Download Audio",
-                                            style: TextStyle(
-                                              fontSize: 16,
-                                              fontWeight: FontWeight.bold,
+                                      const SizedBox(height: 16),
+                                      // Action Buttons Row
+                                      Row(
+                                        children: [
+                                          // Download Button
+                                          Expanded(
+                                            child: ElevatedButton.icon(
+                                              onPressed: _downloadAudioFile,
+                                              icon: const Icon(
+                                                Icons.download_outlined,
+                                                size: 18,
+                                              ),
+                                              label: const Text(
+                                                "Download",
+                                                style: TextStyle(
+                                                  fontSize: 14,
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                              ),
+                                              style: ElevatedButton.styleFrom(
+                                                backgroundColor: const Color(
+                                                  0xFF059669,
+                                                ),
+                                                foregroundColor: Colors.white,
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      vertical: 12,
+                                                    ),
+                                                shape: RoundedRectangleBorder(
+                                                  borderRadius:
+                                                      BorderRadius.circular(8),
+                                                ),
+                                                elevation: 0,
+                                              ),
                                             ),
                                           ),
-                                          style: ElevatedButton.styleFrom(
-                                            backgroundColor: Colors.green,
-                                            foregroundColor: Colors.white,
-                                            padding: const EdgeInsets.symmetric(
-                                              vertical: 12,
+                                          const SizedBox(width: 10),
+                                          // Upload/Analyze Button
+                                          Expanded(
+                                            child: ElevatedButton.icon(
+                                              onPressed: () {
+                                                // Show analysis message without backend
+                                                showDialog(
+                                                  context: context,
+                                                  builder: (context) => AlertDialog(
+                                                    title: const Row(
+                                                      children: [
+                                                        Icon(
+                                                          Icons.check_circle,
+                                                          color: Color(0xFF10B981),
+                                                          size: 28,
+                                                        ),
+                                                        SizedBox(width: 12),
+                                                        Text(
+                                                          'Audio Ready',
+                                                          style: TextStyle(
+                                                            fontWeight: FontWeight.w600,
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                    content: Text(
+                                                      'Audio file prepared successfully!\n\n'
+                                                      'Gestation Period: $_gestationPeriod\n'
+                                                      'File: ${_audioFileName ?? "recording"}',
+                                                    ),
+                                                    shape: RoundedRectangleBorder(
+                                                      borderRadius: BorderRadius.circular(12),
+                                                    ),
+                                                    actions: [
+                                                      TextButton(
+                                                        onPressed: () => Navigator.pop(context),
+                                                        child: const Text('OK'),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                );
+                                              },
+                                              icon: const Icon(
+                                                Icons.analytics_outlined,
+                                                size: 18,
+                                              ),
+                                              label: const Text(
+                                                "Analyze",
+                                                style: const TextStyle(
+                                                  fontSize: 14,
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                              ),
+                                              style: ElevatedButton.styleFrom(
+                                                backgroundColor: const Color(
+                                                  0xFF2C6E91,
+                                                ),
+                                                foregroundColor: Colors.white,
+                                                disabledBackgroundColor: const Color(0xFF9CA3AF),
+                                                disabledForegroundColor: Colors.white70,
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      vertical: 12,
+                                                    ),
+                                                shape: RoundedRectangleBorder(
+                                                  borderRadius:
+                                                      BorderRadius.circular(8),
+                                                ),
+                                                elevation: 0,
+                                              ),
                                             ),
-                                            shape: RoundedRectangleBorder(
-                                              borderRadius:
-                                                  BorderRadius.circular(12),
-                                            ),
-                                            elevation: 3,
                                           ),
-                                        ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 12),
+                                      // Second Row of Action Buttons
+                                      Row(
+                                        children: [
+                                          // Take New Recording Button
+                                          Expanded(
+                                            child: OutlinedButton.icon(
+                                              onPressed: () {
+                                                setState(() {
+                                                  _audioFilePath = null;
+                                                  _audioFileName = null;
+                                                  _audioFileBytes = null;
+                                                });
+                                                // Automatically start recording
+                                                _startRecording();
+                                              },
+                                              icon: const Icon(
+                                                Icons.mic_none,
+                                                size: 18,
+                                              ),
+                                              label: const Text(
+                                                "New Recording",
+                                                style: TextStyle(
+                                                  fontSize: 14,
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                              ),
+                                              style: OutlinedButton.styleFrom(
+                                                foregroundColor: const Color(0xFF2C6E91),
+                                                padding: const EdgeInsets.symmetric(
+                                                  vertical: 12,
+                                                ),
+                                                side: const BorderSide(
+                                                  color: Color(0xFF2C6E91),
+                                                  width: 1.5,
+                                                ),
+                                                shape: RoundedRectangleBorder(
+                                                  borderRadius:
+                                                      BorderRadius.circular(8),
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 10),
+                                          // Cancel Recording Button
+                                          Expanded(
+                                            child: OutlinedButton.icon(
+                                              onPressed: () {
+                                                // Show confirmation dialog
+                                                showDialog(
+                                                  context: context,
+                                                  builder: (context) => AlertDialog(
+                                                    title: const Text(
+                                                      'Cancel Recording',
+                                                      style: TextStyle(
+                                                        fontWeight: FontWeight.w600,
+                                                      ),
+                                                    ),
+                                                    content: const Text(
+                                                      'Are you sure you want to cancel this recording? This action cannot be undone.',
+                                                    ),
+                                                    shape: RoundedRectangleBorder(
+                                                      borderRadius: BorderRadius.circular(12),
+                                                    ),
+                                                    actions: [
+                                                      TextButton(
+                                                        onPressed: () => Navigator.pop(context),
+                                                        child: const Text(
+                                                          'Keep Recording',
+                                                          style: TextStyle(
+                                                            color: Color(0xFF6B7280),
+                                                          ),
+                                                        ),
+                                                      ),
+                                                      ElevatedButton(
+                                                        onPressed: () {
+                                                          Navigator.pop(context);
+                                                          setState(() {
+                                                            _audioFilePath = null;
+                                                            _audioFileName = null;
+                                                            _audioFileBytes = null;
+                                                          });
+                                                          ScaffoldMessenger.of(context).showSnackBar(
+                                                            const SnackBar(
+                                                              content: Text('Recording cancelled'),
+                                                              backgroundColor: Color(0xFF6B7280),
+                                                              duration: Duration(seconds: 2),
+                                                            ),
+                                                          );
+                                                        },
+                                                        style: ElevatedButton.styleFrom(
+                                                          backgroundColor: const Color(0xFFDC2626),
+                                                          foregroundColor: Colors.white,
+                                                          shape: RoundedRectangleBorder(
+                                                            borderRadius: BorderRadius.circular(8),
+                                                          ),
+                                                        ),
+                                                        child: const Text('Cancel Recording'),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                );
+                                              },
+                                              icon: const Icon(
+                                                Icons.close,
+                                                size: 18,
+                                              ),
+                                              label: const Text(
+                                                "Cancel",
+                                                style: TextStyle(
+                                                  fontSize: 14,
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                              ),
+                                              style: OutlinedButton.styleFrom(
+                                                foregroundColor: const Color(0xFFDC2626),
+                                                padding: const EdgeInsets.symmetric(
+                                                  vertical: 12,
+                                                ),
+                                                side: const BorderSide(
+                                                  color: Color(0xFFDC2626),
+                                                  width: 1.5,
+                                                ),
+                                                shape: RoundedRectangleBorder(
+                                                  borderRadius:
+                                                      BorderRadius.circular(8),
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ],
                                   ),
@@ -1048,80 +1605,97 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
             FadeTransition(
               opacity: _fadeAnimation,
               child: Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [Colors.blue[50]!, Colors.white],
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                  ),
-                ),
+                decoration: const BoxDecoration(color: Color(0xFFF5F8FA)),
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     const SizedBox(height: 50),
                     Center(
                       child: Container(
-                        height: 220,
-                        width: 220,
+                        height: 180,
+                        width: 180,
                         decoration: BoxDecoration(
                           color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                            color: const Color(0xFFE5E7EB),
+                            width: 1,
+                          ),
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.blue.withValues(alpha: 0.3),
-                              spreadRadius: 3,
-                              blurRadius: 10,
-                              offset: const Offset(0, 5),
+                              color: Colors.black.withValues(alpha: 0.08),
+                              spreadRadius: 0,
+                              blurRadius: 20,
+                              offset: const Offset(0, 4),
                             ),
                           ],
                         ),
-                        padding: const EdgeInsets.all(20),
+                        padding: const EdgeInsets.all(24),
                         child: ClipRRect(
-                          borderRadius: BorderRadius.circular(15),
+                          borderRadius: BorderRadius.circular(12),
                           child: Image.network(
                             "https://media.istockphoto.com/id/1410084181/vector/pregnant-woman-silhouette-continuous-line.jpg?s=612x612&w=0&k=20&c=v_tPP5Av4wm6oz84LRRdK0C9lM6WGKox3_3AlTfTkhQ=",
-                            fit: BoxFit.cover,
+                            fit: BoxFit.contain,
                             alignment: Alignment.center,
                           ),
                         ),
                       ),
                     ),
-                    const SizedBox(height: 30),
+                    const SizedBox(height: 36),
                     Container(
                       padding: const EdgeInsets.symmetric(
-                        horizontal: 30,
-                        vertical: 15,
+                        horizontal: 32,
+                        vertical: 16,
                       ),
                       decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [Colors.blue[400]!, Colors.blue[300]!],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: const Color(0xFFE5E7EB),
+                          width: 1,
                         ),
-                        borderRadius: BorderRadius.circular(30),
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.blue.withValues(alpha: 0.4),
-                            spreadRadius: 2,
-                            blurRadius: 8,
-                            offset: const Offset(0, 3),
+                            color: Colors.black.withValues(alpha: 0.05),
+                            spreadRadius: 0,
+                            blurRadius: 10,
+                            offset: const Offset(0, 2),
                           ),
                         ],
                       ),
-                      child: const Text(
-                        "Welcome to GarbhSuraksha",
-                        style: TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                          letterSpacing: 1,
-                        ),
+                      child: const Column(
+                        children: [
+                          Text(
+                            "GarbhSuraksha",
+                            style: TextStyle(
+                              fontSize: 26,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF2C6E91),
+                              letterSpacing: 0.3,
+                            ),
+                          ),
+                          SizedBox(height: 6),
+                          Text(
+                            "Maternal Health Monitoring System",
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Color(0xFF6B7280),
+                              fontWeight: FontWeight.w400,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                     const SizedBox(height: 40),
-                    const CircularProgressIndicator(
-                      color: Colors.blue,
-                      strokeWidth: 3,
+                    const SizedBox(
+                      width: 32,
+                      height: 32,
+
+                      child: CircularProgressIndicator(
+                        color: Color(0xFF2C6E91),
+                        strokeWidth: 3,
+
+                      ),
                     ),
                   ],
                 ),
