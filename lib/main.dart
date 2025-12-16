@@ -75,42 +75,18 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
     // Show loading screen for at least 2 seconds
     await Future.delayed(const Duration(seconds: 2));
 
-    // Start backend server automatically (only on desktop, not mobile/web)
-    if (!kIsWeb) {
-      if (Platform.isAndroid || Platform.isIOS) {
-        print('📱 Mobile platform detected');
-        print('⚠️  Server must be running on external machine');
-        print('   Expected server at: ${BackendServerManager.getServerUrl()}');
+    // Check hosted backend server connection
+    print('🌐 Connecting to hosted backend server...');
+    print('   Server URL: ${BackendServerManager.getServerUrl()}');
 
-        // Check if server is accessible
-        print('🔍 Checking for remote server...');
-        final serverAvailable = await BackendServerManager.isServerHealthy();
+    final serverAvailable = await BackendServerManager.startServer();
 
-        if (serverAvailable) {
-          print('✅ Remote server is accessible!');
-        } else {
-          print('❌ No server found. User will need to start it manually.');
-          print('   Instructions will be shown when analysis is attempted.');
-        }
-      } else {
-        print('💻 Desktop platform - attempting to start local server...');
-        print('   A new window will open with the backend server');
-
-        if (mounted) {
-        }
-
-        final serverStarted = await BackendServerManager.startServer();
-
-        if (serverStarted) {
-          print('✅ Backend server started successfully!');
-          print('   Keep the server window open while using the app');
-        } else {
-          print('⚠️  Backend server could not be started automatically');
-          print('   You can start it manually using START_SERVER.bat');
-        }
-      }
+    if (serverAvailable) {
+      print('✅ Backend server is accessible!');
     } else {
-      print('🌐 Web platform - server must be started manually');
+      print('⚠️  Could not connect to backend server');
+      print('   The app will still load, but analysis features may not work');
+      print('   Please check your internet connection');
     }
 
     print('=================================================\n');
@@ -286,7 +262,7 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
     }
 
     try {
-      final fileName = _audioFileName ?? 'recording.wav';
+      final fileName = _audioFileName ?? 'recording_${DateTime.now().millisecondsSinceEpoch}.wav';
 
       if (kIsWeb) {
         if (mounted) {
@@ -309,75 +285,24 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
         throw Exception('Audio file not found. Please record again.');
       }
 
-      if (Platform.isAndroid) {
-        PermissionStatus permissionStatus;
+      // Read the file bytes
+      final fileBytes = await sourceFile.readAsBytes();
 
-        if (await Permission.manageExternalStorage.isPermanentlyDenied ||
-            await Permission.storage.isPermanentlyDenied) {
-          // Show dialog to user
-          if (mounted) {
-            final shouldOpenSettings = await showDialog<bool>(
-              context: context,
-              builder: (context) => AlertDialog(
-                title: const Text('Permission Required'),
-                content: const Text(
-                  'Storage permission is required to download files. '
-                  'Please enable it in app settings.',
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(context, false),
-                    child: const Text('Cancel'),
-                  ),
-                  TextButton(
-                    onPressed: () => Navigator.pop(context, true),
-                    child: const Text('Open Settings'),
-                  ),
-                ],
-              ),
-            );
+      // Use saveFile which works on all platforms and handles permissions automatically
+      String? outputPath = await FilePicker.platform.saveFile(
+        dialogTitle: 'Save Audio File',
+        fileName: fileName,
+        type: FileType.custom,
+        allowedExtensions: ['wav'],
+        bytes: fileBytes,
+      );
 
-            if (shouldOpenSettings == true) {
-              await openAppSettings();
-            }
-          }
-          return;
-        }
-
-        permissionStatus = await Permission.manageExternalStorage.request();
-
-        if (!permissionStatus.isGranted) {
-          permissionStatus = await Permission.storage.request();
-        }
-
-        if (!permissionStatus.isGranted) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: const Text(
-                  'Storage permission is required to download files',
-                ),
-                backgroundColor: Colors.red,
-                action: SnackBarAction(
-                  label: 'Settings',
-                  textColor: Colors.white,
-                  onPressed: () => openAppSettings(),
-                ),
-                duration: const Duration(seconds: 5),
-              ),
-            );
-          }
-          return;
-        }
-      }
-
-      String? selectedDirectory = await FilePicker.platform.getDirectoryPath();
-
-      if (selectedDirectory == null) {
+      if (outputPath == null) {
+        // User cancelled the save dialog
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Download cancelled - No folder selected'),
+              content: Text('Download cancelled'),
               backgroundColor: Colors.grey,
             ),
           );
@@ -385,13 +310,17 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
         return;
       }
 
-      // Copy file to selected directory
-      final newPath = '$selectedDirectory${Platform.pathSeparator}$fileName';
-
-      print('Copying from: $_audioFilePath');
-      print('Copying to: $newPath');
-
-      await sourceFile.copy(newPath);
+      // On some platforms, saveFile already writes the file
+      // On others, we need to write it ourselves
+      try {
+        final outputFile = File(outputPath);
+        if (!await outputFile.exists()) {
+          await outputFile.writeAsBytes(fileBytes);
+        }
+      } catch (e) {
+        print('File already saved by picker: $e');
+        // This is expected on some platforms - the file is already saved
+      }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -405,28 +334,21 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
     } catch (e) {
       print('Download error: $e');
       if (mounted) {
-        String errorMessage = 'Failed to save file';
+        String errorMsg = 'Failed to save file';
 
-        if (e.toString().contains('not found')) {
-          errorMessage = 'Audio file not found. Please record again.';
-        } else if (e.toString().contains('Permission denied')) {
-          errorMessage = 'Permission denied. Please grant storage permission.';
-        } else if (e.toString().contains('No such file')) {
-          errorMessage = 'Source file missing. Please record again.';
+        if (e.toString().contains('Permission denied')) {
+          errorMsg = 'Permission denied. Please try a different location.';
+        } else if (e.toString().contains('not found')) {
+          errorMsg = 'Audio file not found. Please record again.';
         } else {
-          errorMessage = 'Failed to save file: ${e.toString()}';
+          errorMsg = 'Failed to save: ${e.toString()}';
         }
 
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(errorMessage),
+            content: Text(errorMsg),
             backgroundColor: Colors.red,
             duration: const Duration(seconds: 4),
-            action: SnackBarAction(
-              label: 'Retry',
-              textColor: Colors.white,
-              onPressed: () => _downloadAudioFile(),
-            ),
           ),
         );
       }
@@ -695,7 +617,7 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
-                        'The Python backend server must be running on your COMPUTER to analyze audio files.',
+                        'The backend server is currently unavailable.',
                         style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
                       ),
                       const SizedBox(height: 20),
@@ -706,15 +628,15 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(color: Colors.blue[300]!, width: 2),
                         ),
-                        child: const Column(
+                        child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Row(
                               children: [
-                                Icon(Icons.play_circle_filled, color: Colors.blue, size: 24),
+                                Icon(Icons.cloud_off, color: Colors.blue, size: 24),
                                 SizedBox(width: 8),
                                 Text(
-                                  'Quick Start',
+                                  'Connection Issue',
                                   style: TextStyle(
                                     fontWeight: FontWeight.bold,
                                     fontSize: 16,
@@ -725,38 +647,26 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                             ),
                             SizedBox(height: 12),
                             Text(
-                              'On your COMPUTER:',
-                              style: TextStyle(fontWeight: FontWeight.bold),
+                              'Server URL:',
+                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                             ),
-                            SizedBox(height: 8),
-                            Text('1️⃣ Open Terminal/Command Prompt', style: TextStyle(fontSize: 13)),
-                            SizedBox(height: 4),
-                            Text('2️⃣ Run these commands:', style: TextStyle(fontSize: 13)),
-                            SizedBox(height: 8),
-                            Text(
-                              '   cd lib/backend\n'
-                              '   pip install -r requirements.txt\n'
-                              '   python api_server.py',
-                              style: TextStyle(
-                                fontFamily: 'monospace',
-                                fontSize: 12,
-                                color: Colors.black87,
-                              ),
-                            ),
-                            SizedBox(height: 12),
-                            Text('3️⃣ Wait for:', style: TextStyle(fontSize: 13)),
                             SizedBox(height: 4),
                             Text(
-                              '   "Uvicorn running on http://0.0.0.0:8000"',
+                              BackendServerManager.getServerUrl(),
                               style: TextStyle(
                                 fontFamily: 'monospace',
                                 fontSize: 11,
-                                color: Colors.green,
-                                fontWeight: FontWeight.bold,
+                                color: Colors.blue[900],
                               ),
                             ),
                             SizedBox(height: 12),
-                            Text('4️⃣ Keep terminal OPEN and click Retry!', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                            Text('Please check:', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                            SizedBox(height: 8),
+                            Text('1️⃣ Internet connection is active', style: TextStyle(fontSize: 13)),
+                            SizedBox(height: 4),
+                            Text('2️⃣ Railway server is running', style: TextStyle(fontSize: 13)),
+                            SizedBox(height: 4),
+                            Text('3️⃣ No firewall is blocking HTTPS', style: TextStyle(fontSize: 13)),
                           ],
                         ),
                       ),
@@ -770,21 +680,16 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                         ),
                         child: Row(
                           children: [
-                            const Icon(Icons.lightbulb, color: Colors.amber, size: 20),
+                            const Icon(Icons.info_outline, color: Colors.amber, size: 20),
                             const SizedBox(width: 8),
                             Expanded(
                               child: Text(
-                                'Or double-click START_SERVER.bat in project folder',
+                                'Click Retry after checking your connection',
                                 style: TextStyle(fontSize: 12, color: Colors.amber[900]),
                               ),
                             ),
                           ],
                         ),
-                      ),
-                      const SizedBox(height: 12),
-                      Text(
-                        'Read: START_HERE_FIRST.txt for detailed help',
-                        style: TextStyle(fontSize: 11, color: Colors.grey[600], fontStyle: FontStyle.italic),
                       ),
                     ],
                   ),
@@ -821,61 +726,6 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
             _isAnalyzing = false;
           });
           return;
-
-        } else {
-          // Desktop platform - try to start server
-          print('💻 Desktop - attempting to start server...');
-
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Row(
-                  children: [
-                    SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                      ),
-                    ),
-                    SizedBox(width: 16),
-                    Text('Starting backend server, please wait...'),
-                  ],
-                ),
-                backgroundColor: Colors.blue,
-                duration: Duration(seconds: 45),
-              ),
-            );
-          }
-
-          final serverStarted = await BackendServerManager.startServer();
-
-          if (serverStarted) {
-            isServerRunning = true;
-            print('✅ Server started successfully!');
-
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('✅ Server started successfully!'),
-                  backgroundColor: Colors.green,
-                  duration: Duration(seconds: 2),
-                ),
-              );
-            }
-
-            // Give server a moment to fully initialize
-            await Future.delayed(const Duration(seconds: 2));
-
-          } else {
-            print('❌ Could not start server automatically');
-            throw Exception(
-              'Could not start backend server automatically.\n\n'
-              'Please start it manually:\n'
-              'Then try analyzing again.'
-            );
-          }
         }
       }
 
@@ -1360,24 +1210,6 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                     },
                   ),
                   const Divider(height: 1),
-                  ListTile(
-                    leading: const Icon(
-                      Icons.dns_outlined,
-                      color: Color(0xFF2C6E91),
-                    ),
-                    title: const Text(
-                      "Server Configuration",
-                      style: TextStyle(fontWeight: FontWeight.w500),
-                    ),
-                    subtitle: Text(
-                      BackendServerManager.customServerUrl ?? "Auto",
-                      style: const TextStyle(fontSize: 11, color: Colors.grey),
-                    ),
-                    onTap: () {
-                      Navigator.pop(context);
-                      _showServerConfigDialog();
-                    },
-                  ),
                   ListTile(
                     leading: const Icon(
                       Icons.settings_outlined,
@@ -2389,7 +2221,7 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                           borderRadius: BorderRadius.circular(12),
                           child: Image.network(
                             'https://static.vecteezy.com/system/resources/thumbnails/000/585/705/small/5-08.jpg',
-                            fit: BoxFit.cover,
+                            fit: BoxFit.contain,
                             loadingBuilder: (context, child, loadingProgress) {
                               if (loadingProgress == null) return child;
                               return Center(
@@ -2403,24 +2235,12 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                               );
                             },
                             errorBuilder: (context, error, stackTrace) {
-                              return Container(
-                                decoration: BoxDecoration(
-                                  gradient: LinearGradient(
-                                    begin: Alignment.topLeft,
-                                    end: Alignment.bottomRight,
-                                    colors: [
-                                      const Color(0xFF6366F1).withValues(alpha: 0.1),
-                                      const Color(0xFF8B5CF6).withValues(alpha: 0.1),
-                                    ],
-                                  ),
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: const Center(
-                                  child: Icon(
-                                    Icons.pregnant_woman,
-                                    size: 100,
-                                    color: Color(0xFF6366F1),
-                                  ),
+                              // If network image fails, try to show a fallback image
+                              return const Center(
+                                child: Icon(
+                                  Icons.local_hospital,
+                                  size: 100,
+                                  color: Color(0xFF2C6E91),
                                 ),
                               );
                             },
@@ -2491,368 +2311,21 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                         fontWeight: FontWeight.w500,
                       ),
                     ),
-                    if (!kIsWeb)
-                      const SizedBox(height: 4),
-                    if (!kIsWeb)
-                      const Text(
-                        "Starting backend server",
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Color(0xFF9CA3AF),
-                          fontWeight: FontWeight.w400,
-                        ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      "Connecting to backend server",
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF9CA3AF),
+                        fontWeight: FontWeight.w400,
                       ),
+                    ),
                   ],
                 ),
               ),
             ),
         ],
       ),
-    );
-  }
-
-  /// Show server configuration dialog for physical devices
-  void _showServerConfigDialog() {
-    final TextEditingController serverUrlController = TextEditingController(
-      text: BackendServerManager.customServerUrl ?? '',
-    );
-
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: Row(
-            children: [
-              Icon(Icons.dns_outlined, color: Color(0xFF2C6E91)),
-              SizedBox(width: 12),
-              Text(
-                'Server Configuration',
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF1F2937),
-                ),
-              ),
-            ],
-          ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  padding: EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Color(0xFFFEF3C7),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Color(0xFFF59E0B), width: 1),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(Icons.info_outline, color: Color(0xFFF59E0B), size: 20),
-                      SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          Platform.isAndroid || Platform.isIOS
-                              ? 'For physical devices only'
-                              : 'Optional: Override auto-detected URL',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Color(0xFF92400E),
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                SizedBox(height: 16),
-                Text(
-                  'Current Configuration:',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFF374151),
-                  ),
-                ),
-                SizedBox(height: 8),
-                Container(
-                  padding: EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: Color(0xFFF3F4F6),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Text(
-                    BackendServerManager.getServerUrl(),
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontFamily: 'monospace',
-                      color: Color(0xFF1F2937),
-                    ),
-                  ),
-                ),
-                SizedBox(height: 20),
-                Text(
-                  'Custom Server URL:',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFF374151),
-                  ),
-                ),
-                SizedBox(height: 8),
-                TextField(
-                  controller: serverUrlController,
-                  decoration: InputDecoration(
-                    hintText: 'http://192.168.1.100:8000',
-                    hintStyle: TextStyle(color: Colors.grey[400]),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: BorderSide(color: Color(0xFFD1D5DB)),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: BorderSide(color: Color(0xFF2C6E91), width: 2),
-                    ),
-                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                    suffixIcon: IconButton(
-                      icon: Icon(Icons.clear, size: 20),
-                      onPressed: () {
-                        serverUrlController.clear();
-                      },
-                    ),
-                  ),
-                  style: TextStyle(fontSize: 13),
-                ),
-                SizedBox(height: 16),
-                Container(
-                  padding: EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Color(0xFFEFF6FF),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Color(0xFF2C6E91).withValues(alpha: 0.2)),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(Icons.lightbulb_outline, color: Color(0xFF2C6E91), size: 18),
-                          SizedBox(width: 8),
-                          Text(
-                            'Setup Instructions:',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: Color(0xFF1E3A8A),
-                            ),
-                          ),
-                        ],
-                      ),
-                      SizedBox(height: 8),
-                      _buildInstructionStep('1', 'Find your computer\'s IP address:\n   Windows: cmd → ipconfig → IPv4 Address\n   Example: 192.168.1.100'),
-                      SizedBox(height: 6),
-                      _buildInstructionStep('2', 'Ensure phone and computer are on the same Wi-Fi network'),
-                      SizedBox(height: 6),
-                      _buildInstructionStep('3', 'Make sure backend server is running on your computer'),
-                      SizedBox(height: 6),
-                      _buildInstructionStep('4', 'Enter URL as: http://YOUR_IP:8000'),
-                      SizedBox(height: 6),
-                      _buildInstructionStep('5', 'Test in phone browser: http://YOUR_IP:8000/health'),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-              },
-              child: Text(
-                'Cancel',
-                style: TextStyle(
-                  color: Color(0xFF6B7280),
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-            TextButton(
-              onPressed: () {
-                BackendServerManager.customServerUrl = null;
-                setState(() {});
-                Navigator.of(context).pop();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('Reset to auto-detect: ${BackendServerManager.getServerUrl()}'),
-                    backgroundColor: Color(0xFF2C6E91),
-                    behavior: SnackBarBehavior.floating,
-                  ),
-                );
-              },
-              child: Text(
-                'Reset',
-                style: TextStyle(
-                  color: Color(0xFFEF4444),
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-            ElevatedButton(
-              onPressed: () async {
-                String url = serverUrlController.text.trim();
-                if (url.isEmpty) {
-                  BackendServerManager.customServerUrl = null;
-                  setState(() {});
-                  Navigator.of(context).pop();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('Using auto-detect: ${BackendServerManager.getServerUrl()}'),
-                      backgroundColor: Color(0xFF2C6E91),
-                      behavior: SnackBarBehavior.floating,
-                    ),
-                  );
-                  return;
-                }
-
-                // Validate URL format
-                if (!url.startsWith('http://') && !url.startsWith('https://')) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('URL must start with http:// or https://'),
-                      backgroundColor: Colors.red,
-                      behavior: SnackBarBehavior.floating,
-                    ),
-                  );
-                  return;
-                }
-
-                // Remove trailing slash
-                if (url.endsWith('/')) {
-                  url = url.substring(0, url.length - 1);
-                }
-
-                // Set the custom URL
-                BackendServerManager.customServerUrl = url;
-
-                // Test connection
-                Navigator.of(context).pop();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Row(
-                      children: [
-                        SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                          ),
-                        ),
-                        SizedBox(width: 12),
-                        Text('Testing connection to $url...'),
-                      ],
-                    ),
-                    backgroundColor: Color(0xFF2C6E91),
-                    behavior: SnackBarBehavior.floating,
-                    duration: Duration(seconds: 5),
-                  ),
-                );
-
-                final isHealthy = await BackendServerManager.isServerHealthy();
-                ScaffoldMessenger.of(context).hideCurrentSnackBar();
-
-                if (isHealthy) {
-                  setState(() {});
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Row(
-                        children: [
-                          Icon(Icons.check_circle, color: Colors.white),
-                          SizedBox(width: 12),
-                          Expanded(child: Text('✓ Connected successfully!\nServer: $url')),
-                        ],
-                      ),
-                      backgroundColor: Colors.green,
-                      behavior: SnackBarBehavior.floating,
-                      duration: Duration(seconds: 3),
-                    ),
-                  );
-                } else {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Row(
-                        children: [
-                          Icon(Icons.error_outline, color: Colors.white),
-                          SizedBox(width: 12),
-                          Expanded(
-                            child: Text(
-                              '✗ Cannot connect to server\n\nMake sure:\n• Server is running on your computer\n• Both devices are on same Wi-Fi\n• Firewall allows port 8000\n• URL is correct',
-                            ),
-                          ),
-                        ],
-                      ),
-                      backgroundColor: Colors.red,
-                      behavior: SnackBarBehavior.floating,
-                      duration: Duration(seconds: 6),
-                    ),
-                  );
-                }
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Color(0xFF2C6E91),
-                foregroundColor: Colors.white,
-                padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-              ),
-              child: Text(
-                'Save & Test',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Widget _buildInstructionStep(String number, String text) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          width: 20,
-          height: 20,
-          decoration: BoxDecoration(
-            color: Color(0xFF2C6E91),
-            shape: BoxShape.circle,
-          ),
-          child: Center(
-            child: Text(
-              number,
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 11,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-        ),
-        SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            text,
-            style: TextStyle(
-              fontSize: 11,
-              color: Color(0xFF1E3A8A),
-              height: 1.4,
-            ),
-          ),
-        ),
-      ],
     );
   }
 }

@@ -64,16 +64,21 @@ class PredictionService {
       request.fields['gestation_period'] = gestationPeriod;
 
       // Add audio file
-      if (kIsWeb && audioBytes != null) {
-        print('🌐 Web platform: Using audio bytes (${audioBytes.length} bytes)');
+      if (kIsWeb) {
+        print('🌐 Web platform: Using audio bytes');
         // For web, use bytes directly
-        request.files.add(
-          http.MultipartFile.fromBytes(
-            'audio_file',
-            audioBytes,
-            filename: 'recording.wav',
-          ),
-        );
+        if (audioBytes != null && audioBytes.isNotEmpty) {
+          print('   Bytes available: ${audioBytes.length} bytes');
+          request.files.add(
+            http.MultipartFile.fromBytes(
+              'audio_file',
+              audioBytes,
+              filename: 'recording.wav',
+            ),
+          );
+        } else {
+          throw Exception('Audio bytes not available for web platform');
+        }
       } else {
         print('📱 Native platform: Using file path');
         // For mobile/desktop, use file path
@@ -85,11 +90,19 @@ class PredictionService {
         final fileSize = await file.length();
         print('📦 File size: ${fileSize} bytes');
 
+        // Extract filename safely without Platform.pathSeparator
+        String filename = audioFilePath;
+        if (audioFilePath.contains('/')) {
+          filename = audioFilePath.split('/').last;
+        } else if (audioFilePath.contains('\\')) {
+          filename = audioFilePath.split('\\').last;
+        }
+
         request.files.add(
           await http.MultipartFile.fromPath(
             'audio_file',
             audioFilePath,
-            filename: audioFilePath.split(Platform.pathSeparator).last,
+            filename: filename,
           ),
         );
       }

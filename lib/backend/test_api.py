@@ -5,7 +5,7 @@ import requests
 import json
 from pathlib import Path
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = "https://garbhsurakhsha.up.railway.app"
 
 def test_health_check():
     """Test the health check endpoint"""
@@ -123,4 +123,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
