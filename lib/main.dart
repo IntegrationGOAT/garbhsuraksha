@@ -44,10 +44,9 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
   bool _isRecording = false;
   String? _audioFilePath;
   String? _audioFileName;
-  List<int>? _audioFileBytes; // For web platform
+  List<int>? _audioFileBytes;
   int _recordingDuration = 0;
   Timer? _recordingTimer;
-
 
   @override
   void initState() {
@@ -60,7 +59,6 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
       CurvedAnimation(parent: _animationController, curve: Curves.easeInOut),
     );
 
-    // Start loading screen transition after 3 seconds
     Future.delayed(const Duration(seconds: 1), () {
       _animationController.forward().then((_) {
         setState(() {
@@ -81,9 +79,7 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
 
   Future<void> _startRecording() async {
     try {
-      // Check if recording is supported
       if (kIsWeb) {
-        // For web, we still try but may have limitations
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -98,10 +94,17 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
 
       if (await Permission.microphone.request().isGranted) {
         final path = kIsWeb
-            ? 'recording_${DateTime.now().millisecondsSinceEpoch}.m4a'
-            : '${Directory.systemTemp.path}/recording_${DateTime.now().millisecondsSinceEpoch}.m4a';
+            ? 'recording_${DateTime.now().millisecondsSinceEpoch}.wav'
+            : '${Directory.systemTemp.path}/recording_${DateTime.now().millisecondsSinceEpoch}.wav';
 
-        await _audioRecorder.start(const RecordConfig(), path: path);
+        await _audioRecorder.start(
+          const RecordConfig(
+            encoder: AudioEncoder.wav,
+            numChannels: 1,
+            sampleRate: 16000,
+          ),
+          path: path,
+        );
 
         if (mounted) {
           setState(() {
@@ -109,7 +112,6 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
             _recordingDuration = 0;
           });
 
-          // Show success message
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text('Recording started!'),
@@ -119,7 +121,6 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
           );
         }
 
-        // Start timer to track duration
         _recordingTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
           if (mounted && _isRecording) {
             setState(() {
@@ -170,11 +171,10 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
           _isRecording = false;
           _audioFilePath = path;
           _audioFileName =
-              path?.split('/').last.split('\\').last ?? 'recording.m4a';
+              path?.split('/').last.split('\\').last ?? 'recording.wav';
           _recordingDuration = 0;
         });
 
-        // Show success message
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Recording stopped successfully!'),
@@ -204,10 +204,9 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
     if (_audioFilePath == null) return;
 
     try {
-      final fileName = _audioFileName ?? 'recording.m4a';
+      final fileName = _audioFileName ?? 'recording.wav';
 
       if (kIsWeb) {
-        // For web, show informative message
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -222,15 +221,9 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
         return;
       }
 
-      // Request storage permission for Android
       if (Platform.isAndroid) {
         PermissionStatus permissionStatus;
 
-        // Check Android version and request appropriate permission
-        // For Android 13+ (API 33+), we need manageExternalStorage or use scoped storage
-        // For now, we'll try manageExternalStorage first, then fall back to storage
-
-        // Try to check if permission is permanently denied
         if (await Permission.manageExternalStorage.isPermanentlyDenied ||
             await Permission.storage.isPermanentlyDenied) {
           // Show dialog to user
@@ -263,10 +256,8 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
           return;
         }
 
-        // Request manageExternalStorage permission (for Android 11+)
         permissionStatus = await Permission.manageExternalStorage.request();
 
-        // If manageExternalStorage is denied, try regular storage permission
         if (!permissionStatus.isGranted) {
           permissionStatus = await Permission.storage.request();
         }
@@ -292,11 +283,9 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
         }
       }
 
-      // For Android/Desktop - use directory picker
       String? selectedDirectory = await FilePicker.platform.getDirectoryPath();
 
       if (selectedDirectory == null) {
-        // User cancelled
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -342,34 +331,52 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
 
   Future<void> _pickAudioFile() async {
     try {
-      // Use FileType.any with allowed extensions to avoid Android emulator issues
-      // FileType.audio doesn't work well on emulators
       FilePickerResult? result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
-        allowedExtensions: ['mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac', '3gp', 'amr'],
+        allowedExtensions: [
+          'mp3',
+          'wav',
+          'm4a',
+          'aac',
+          'ogg',
+          'flac',
+          '3gp',
+          'amr',
+        ],
         allowMultiple: false,
-        withData: true, // Load bytes into memory immediately
+        withData: true,
       );
 
       if (result != null && result.files.isNotEmpty) {
         final pickedFile = result.files.single;
 
-        // Validate file extension
         final fileName = pickedFile.name.toLowerCase();
-        final validExtensions = ['mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac', '3gp', 'amr'];
-        final hasValidExtension = validExtensions.any((ext) => fileName.endsWith('.$ext'));
+        final validExtensions = [
+          'mp3',
+          'wav',
+          'm4a',
+          'aac',
+          'ogg',
+          'flac',
+          '3gp',
+          'amr',
+        ];
+        final hasValidExtension = validExtensions.any(
+          (ext) => fileName.endsWith('.$ext'),
+        );
 
         if (!hasValidExtension) {
-          throw Exception('Invalid file type. Please select an audio file (.mp3, .wav, .m4a, etc.)');
+          throw Exception(
+            'Invalid file type. Please select an audio file (.mp3, .wav, .m4a, etc.)',
+          );
         }
 
-        // Handle web platform differently (no File operations)
         if (kIsWeb) {
           if (pickedFile.bytes != null && pickedFile.bytes!.isNotEmpty) {
             setState(() {
               _audioFileBytes = pickedFile.bytes!;
               _audioFileName = pickedFile.name;
-              _audioFilePath = pickedFile.name; // Just store name for display
+              _audioFilePath = pickedFile.name;
             });
 
             print('✓ File loaded for web: ${pickedFile.name}');
@@ -378,7 +385,9 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
-                  content: Text('✓ Selected: ${pickedFile.name} (${(pickedFile.bytes!.length / 1024).toStringAsFixed(1)} KB)'),
+                  content: Text(
+                    '✓ Selected: ${pickedFile.name} (${(pickedFile.bytes!.length / 1024).toStringAsFixed(1)} KB)',
+                  ),
                   backgroundColor: const Color(0xFF10B981),
                   duration: const Duration(seconds: 2),
                 ),
@@ -395,13 +404,17 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
           final tempDir = await getTemporaryDirectory();
           final timestamp = DateTime.now().millisecondsSinceEpoch;
           final tempFileName = pickedFile.name;
-          final tempFile = File('${tempDir.path}/upload_$timestamp\_$tempFileName');
+          final tempFile = File(
+            '${tempDir.path}/upload_$timestamp\_$tempFileName',
+          );
 
           // Priority: Use bytes (loaded via withData: true)
           if (pickedFile.bytes != null && pickedFile.bytes!.isNotEmpty) {
             // Method 1: Use bytes - Most reliable for Android
             await tempFile.writeAsBytes(pickedFile.bytes!);
-            print('✓ File loaded using bytes method (${pickedFile.bytes!.length} bytes)');
+            print(
+              '✓ File loaded using bytes method (${pickedFile.bytes!.length} bytes)',
+            );
           } else if (pickedFile.path != null && pickedFile.path!.isNotEmpty) {
             // Method 2: Fallback to path copy for desktop/older Android
             final sourceFile = File(pickedFile.path!);
@@ -410,17 +423,23 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
               await tempFile.writeAsBytes(bytes);
               print('✓ File loaded from path: ${pickedFile.path}');
             } else {
-              throw Exception('Source file not accessible at: ${pickedFile.path}');
+              throw Exception(
+                'Source file not accessible at: ${pickedFile.path}',
+              );
             }
           } else {
-            throw Exception('No file data available. Please try a different file.');
+            throw Exception(
+              'No file data available. Please try a different file.',
+            );
           }
 
           // Verify the file was created and has content
           if (await tempFile.exists()) {
             final fileSize = await tempFile.length();
             print('✓ Temp file created: ${tempFile.path}');
-            print('✓ File size: $fileSize bytes (${(fileSize / 1024).toStringAsFixed(2)} KB)');
+            print(
+              '✓ File size: $fileSize bytes (${(fileSize / 1024).toStringAsFixed(2)} KB)',
+            );
 
             if (fileSize > 0) {
               setState(() {
@@ -431,7 +450,9 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
               if (mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
-                    content: Text('✓ Selected: $tempFileName (${(fileSize / 1024).toStringAsFixed(1)} KB)'),
+                    content: Text(
+                      '✓ Selected: $tempFileName (${(fileSize / 1024).toStringAsFixed(1)} KB)',
+                    ),
                     backgroundColor: const Color(0xFF10B981),
                     duration: const Duration(seconds: 2),
                   ),
@@ -457,23 +478,31 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
 
         // Make error messages user-friendly
         if (errorMsg.contains('file type') && errorMsg.contains('null')) {
-          errorMsg = 'File picker error. Please try selecting from your Downloads or Music folder.';
+          errorMsg =
+              'File picker error. Please try selecting from your Downloads or Music folder.';
         } else if (errorMsg.contains('Invalid file type')) {
           errorMsg = errorMsg.split(':').last.trim();
         } else if (errorMsg.contains('namespace')) {
-          errorMsg = 'File access error. Try selecting from Downloads or Music folder.';
+          errorMsg =
+              'File access error. Try selecting from Downloads or Music folder.';
         } else if (errorMsg.contains('permission')) {
-          errorMsg = 'Storage permission denied. Grant permission in Settings and retry.';
+          errorMsg =
+              'Storage permission denied. Grant permission in Settings and retry.';
         } else if (errorMsg.contains('empty')) {
-          errorMsg = 'Selected file is empty (0 bytes). Choose a valid audio file.';
-        } else if (errorMsg.contains('instance') || errorMsg.contains('not been loaded')) {
-          errorMsg = 'File loading error. Try selecting a different file or restart the app.';
+          errorMsg =
+              'Selected file is empty (0 bytes). Choose a valid audio file.';
+        } else if (errorMsg.contains('instance') ||
+            errorMsg.contains('not been loaded')) {
+          errorMsg =
+              'File loading error. Try selecting a different file or restart the app.';
         } else if (errorMsg.contains('not accessible')) {
-          errorMsg = 'Cannot access file. Try copying it to Downloads folder first.';
+          errorMsg =
+              'Cannot access file. Try copying it to Downloads folder first.';
         } else {
           // Extract the actual error message
           final parts = errorMsg.split(':');
-          errorMsg = 'Could not load file: ${parts.length > 1 ? parts.last.trim() : errorMsg}';
+          errorMsg =
+              'Could not load file: ${parts.length > 1 ? parts.last.trim() : errorMsg}';
         }
 
         ScaffoldMessenger.of(context).showSnackBar(
@@ -508,9 +537,9 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: const Icon(
-                      Icons.favorite,
+                      Icons.local_hospital,
                       color: Color(0xFF2C6E91),
-                      size: 20,
+                      size: 30,
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -567,7 +596,7 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                             border: Border.all(color: Colors.white, width: 3),
                           ),
                           child: const Icon(
-                            Icons.pregnant_woman,
+                            Icons.local_hospital_outlined,
                             size: 50,
                             color: Color(0xFF2C6E91),
                           ),
@@ -1025,7 +1054,6 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                             ],
                           ),
                         ),
-                      // Audio Upload Section (shows after valid gestation period)
                       if (_gestationPeriod.isNotEmpty)
                         const SizedBox(height: 28),
                       if (_gestationPeriod.isNotEmpty)
@@ -1098,7 +1126,7 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                               ),
                               const SizedBox(height: 24),
 
-                              // Recording Animation and Timer - Shows when recording
+
                               if (_isRecording)
                                 Container(
                                   margin: const EdgeInsets.only(bottom: 20),
@@ -1166,7 +1194,6 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                         ],
                                       ),
                                       const SizedBox(height: 16),
-                                      // Timer Display
                                       Container(
                                         padding: const EdgeInsets.symmetric(
                                           horizontal: 18,
@@ -1193,7 +1220,6 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                         ),
                                       ),
                                       const SizedBox(height: 14),
-                                      // Progress Bar
                                       ClipRRect(
                                         borderRadius: BorderRadius.circular(6),
                                         child: LinearProgressIndicator(
@@ -1212,10 +1238,10 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                   ),
                                 ),
 
-                              // Action Buttons Row
+
+
                               Row(
                                 children: [
-                                  // Start/Stop Recording Button
                                   Expanded(
                                     child: ElevatedButton.icon(
                                       onPressed: _isRecording
@@ -1295,7 +1321,8 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                   ),
                                 ],
                               ),
-                              // Display filename if audio is selected
+
+
                               if (_audioFileName != null) ...[
                                 const SizedBox(height: 20),
                                 Container(
@@ -1355,10 +1382,8 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                         ],
                                       ),
                                       const SizedBox(height: 16),
-                                      // Action Buttons Row
                                       Row(
                                         children: [
-                                          // Download Button
                                           Expanded(
                                             child: ElevatedButton.icon(
                                               onPressed: _downloadAudioFile,
@@ -1391,11 +1416,9 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                             ),
                                           ),
                                           const SizedBox(width: 10),
-                                          // Upload/Analyze Button
                                           Expanded(
                                             child: ElevatedButton.icon(
                                               onPressed: () {
-                                                // Show analysis message without backend
                                                 showDialog(
                                                   context: context,
                                                   builder: (context) => AlertDialog(
@@ -1403,14 +1426,17 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                                       children: [
                                                         Icon(
                                                           Icons.check_circle,
-                                                          color: Color(0xFF10B981),
+                                                          color: Color(
+                                                            0xFF10B981,
+                                                          ),
                                                           size: 28,
                                                         ),
                                                         SizedBox(width: 12),
                                                         Text(
                                                           'Audio Ready',
                                                           style: TextStyle(
-                                                            fontWeight: FontWeight.w600,
+                                                            fontWeight:
+                                                                FontWeight.w600,
                                                           ),
                                                         ),
                                                       ],
@@ -1421,11 +1447,17 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                                       'File: ${_audioFileName ?? "recording"}',
                                                     ),
                                                     shape: RoundedRectangleBorder(
-                                                      borderRadius: BorderRadius.circular(12),
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                            12,
+                                                          ),
                                                     ),
                                                     actions: [
                                                       TextButton(
-                                                        onPressed: () => Navigator.pop(context),
+                                                        onPressed: () =>
+                                                            Navigator.pop(
+                                                              context,
+                                                            ),
                                                         child: const Text('OK'),
                                                       ),
                                                     ],
@@ -1448,8 +1480,10 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                                   0xFF2C6E91,
                                                 ),
                                                 foregroundColor: Colors.white,
-                                                disabledBackgroundColor: const Color(0xFF9CA3AF),
-                                                disabledForegroundColor: Colors.white70,
+                                                disabledBackgroundColor:
+                                                    const Color(0xFF9CA3AF),
+                                                disabledForegroundColor:
+                                                    Colors.white70,
                                                 padding:
                                                     const EdgeInsets.symmetric(
                                                       vertical: 12,
@@ -1465,10 +1499,8 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                         ],
                                       ),
                                       const SizedBox(height: 12),
-                                      // Second Row of Action Buttons
                                       Row(
                                         children: [
-                                          // Take New Recording Button
                                           Expanded(
                                             child: OutlinedButton.icon(
                                               onPressed: () {
@@ -1477,7 +1509,6 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                                   _audioFileName = null;
                                                   _audioFileBytes = null;
                                                 });
-                                                // Automatically start recording
                                                 _startRecording();
                                               },
                                               icon: const Icon(
@@ -1492,10 +1523,13 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                                 ),
                                               ),
                                               style: OutlinedButton.styleFrom(
-                                                foregroundColor: const Color(0xFF2C6E91),
-                                                padding: const EdgeInsets.symmetric(
-                                                  vertical: 12,
+                                                foregroundColor: const Color(
+                                                  0xFF2C6E91,
                                                 ),
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      vertical: 12,
+                                                    ),
                                                 side: const BorderSide(
                                                   color: Color(0xFF2C6E91),
                                                   width: 1.5,
@@ -1508,60 +1542,91 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                             ),
                                           ),
                                           const SizedBox(width: 10),
-                                          // Cancel Recording Button
                                           Expanded(
                                             child: OutlinedButton.icon(
                                               onPressed: () {
-                                                // Show confirmation dialog
                                                 showDialog(
                                                   context: context,
                                                   builder: (context) => AlertDialog(
                                                     title: const Text(
                                                       'Cancel Recording',
                                                       style: TextStyle(
-                                                        fontWeight: FontWeight.w600,
+                                                        fontWeight:
+                                                            FontWeight.w600,
                                                       ),
                                                     ),
                                                     content: const Text(
                                                       'Are you sure you want to cancel this recording? This action cannot be undone.',
                                                     ),
                                                     shape: RoundedRectangleBorder(
-                                                      borderRadius: BorderRadius.circular(12),
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                            12,
+                                                          ),
                                                     ),
                                                     actions: [
                                                       TextButton(
-                                                        onPressed: () => Navigator.pop(context),
+                                                        onPressed: () =>
+                                                            Navigator.pop(
+                                                              context,
+                                                            ),
                                                         child: const Text(
                                                           'Keep Recording',
                                                           style: TextStyle(
-                                                            color: Color(0xFF6B7280),
+                                                            color: Color(
+                                                              0xFF6B7280,
+                                                            ),
                                                           ),
                                                         ),
                                                       ),
                                                       ElevatedButton(
                                                         onPressed: () {
-                                                          Navigator.pop(context);
+                                                          Navigator.pop(
+                                                            context,
+                                                          );
                                                           setState(() {
-                                                            _audioFilePath = null;
-                                                            _audioFileName = null;
-                                                            _audioFileBytes = null;
+                                                            _audioFilePath =
+                                                                null;
+                                                            _audioFileName =
+                                                                null;
+                                                            _audioFileBytes =
+                                                                null;
                                                           });
-                                                          ScaffoldMessenger.of(context).showSnackBar(
+                                                          ScaffoldMessenger.of(
+                                                            context,
+                                                          ).showSnackBar(
                                                             const SnackBar(
-                                                              content: Text('Recording cancelled'),
-                                                              backgroundColor: Color(0xFF6B7280),
-                                                              duration: Duration(seconds: 2),
+                                                              content: Text(
+                                                                'Recording cancelled',
+                                                              ),
+                                                              backgroundColor:
+                                                                  Color(
+                                                                    0xFF6B7280,
+                                                                  ),
+                                                              duration:
+                                                                  Duration(
+                                                                    seconds: 2,
+                                                                  ),
                                                             ),
                                                           );
                                                         },
                                                         style: ElevatedButton.styleFrom(
-                                                          backgroundColor: const Color(0xFFDC2626),
-                                                          foregroundColor: Colors.white,
+                                                          backgroundColor:
+                                                              const Color(
+                                                                0xFFDC2626,
+                                                              ),
+                                                          foregroundColor:
+                                                              Colors.white,
                                                           shape: RoundedRectangleBorder(
-                                                            borderRadius: BorderRadius.circular(8),
+                                                            borderRadius:
+                                                                BorderRadius.circular(
+                                                                  8,
+                                                                ),
                                                           ),
                                                         ),
-                                                        child: const Text('Cancel Recording'),
+                                                        child: const Text(
+                                                          'Cancel Recording',
+                                                        ),
                                                       ),
                                                     ],
                                                   ),
@@ -1579,10 +1644,13 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                                 ),
                                               ),
                                               style: OutlinedButton.styleFrom(
-                                                foregroundColor: const Color(0xFFDC2626),
-                                                padding: const EdgeInsets.symmetric(
-                                                  vertical: 12,
+                                                foregroundColor: const Color(
+                                                  0xFFDC2626,
                                                 ),
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      vertical: 12,
+                                                    ),
                                                 side: const BorderSide(
                                                   color: Color(0xFFDC2626),
                                                   width: 1.5,
@@ -1702,7 +1770,6 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                       child: CircularProgressIndicator(
                         color: Color(0xFF2C6E91),
                         strokeWidth: 3,
-
                       ),
                     ),
                   ],
