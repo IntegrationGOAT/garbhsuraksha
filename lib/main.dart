@@ -934,13 +934,39 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
               '• Network connection is stable\n'
               '• Audio file is not too large';
         } else if (errorMessage.contains('Connection refused') ||
-                   errorMessage.contains('Failed host lookup')) {
-          errorMessage = '🔌 Connection Failed\n\n'
-              'Could not connect to server.\n\n'
-              'Please ensure:\n'
-              '• Server is running at ${BackendServerManager.getServerUrl()}\n'
-              '• No firewall is blocking the connection\n'
-              '• You are on the same network (for mobile)';
+                   errorMessage.contains('Failed host lookup') ||
+                   errorMessage.contains('SocketException')) {
+
+          // Check if on physical device
+          bool isPhysicalDevice = false;
+          if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+            isPhysicalDevice = true;
+          }
+
+          if (isPhysicalDevice) {
+            errorMessage = '🔌 Cannot Connect to Server\n\n'
+                'Server URL: ${BackendServerManager.getServerUrl()}\n\n'
+                '📱 Running on Physical Device?\n\n'
+                'Setup Required:\n\n'
+                '1. Start server on your COMPUTER:\n'
+                '   • Open Terminal\n'
+                '   • cd lib/backend\n'
+                '   • python api_server.py\n\n'
+                '2. Configure server URL:\n'
+                '   • Open Menu (☰)\n'
+                '   • Tap "Server Configuration"\n'
+                '   • Enter your computer\'s IP\n'
+                '   • Example: http://192.168.1.100:8000\n\n'
+                '3. Both devices must be on SAME Wi-Fi!\n\n'
+                'Need help? See PHYSICAL_DEVICE_SETUP.md';
+          } else {
+            errorMessage = '🔌 Connection Failed\n\n'
+                'Could not connect to server.\n\n'
+                'Please ensure:\n'
+                '• Server is running at ${BackendServerManager.getServerUrl()}\n'
+                '• No firewall is blocking the connection\n'
+                '• You are on the same network (for mobile)';
+          }
         } else if (errorMessage.contains('SocketException')) {
           errorMessage = '🌐 Network Error\n\n'
               'Please check your network connection and try again.';
@@ -1334,6 +1360,24 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                     },
                   ),
                   const Divider(height: 1),
+                  ListTile(
+                    leading: const Icon(
+                      Icons.dns_outlined,
+                      color: Color(0xFF2C6E91),
+                    ),
+                    title: const Text(
+                      "Server Configuration",
+                      style: TextStyle(fontWeight: FontWeight.w500),
+                    ),
+                    subtitle: Text(
+                      BackendServerManager.customServerUrl ?? "Auto",
+                      style: const TextStyle(fontSize: 11, color: Colors.grey),
+                    ),
+                    onTap: () {
+                      Navigator.pop(context);
+                      _showServerConfigDialog();
+                    },
+                  ),
                   ListTile(
                     leading: const Icon(
                       Icons.settings_outlined,
@@ -2464,6 +2508,351 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
             ),
         ],
       ),
+    );
+  }
+
+  /// Show server configuration dialog for physical devices
+  void _showServerConfigDialog() {
+    final TextEditingController serverUrlController = TextEditingController(
+      text: BackendServerManager.customServerUrl ?? '',
+    );
+
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Row(
+            children: [
+              Icon(Icons.dns_outlined, color: Color(0xFF2C6E91)),
+              SizedBox(width: 12),
+              Text(
+                'Server Configuration',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF1F2937),
+                ),
+              ),
+            ],
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  padding: EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Color(0xFFFEF3C7),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Color(0xFFF59E0B), width: 1),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.info_outline, color: Color(0xFFF59E0B), size: 20),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          Platform.isAndroid || Platform.isIOS
+                              ? 'For physical devices only'
+                              : 'Optional: Override auto-detected URL',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFF92400E),
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                SizedBox(height: 16),
+                Text(
+                  'Current Configuration:',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF374151),
+                  ),
+                ),
+                SizedBox(height: 8),
+                Container(
+                  padding: EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Color(0xFFF3F4F6),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    BackendServerManager.getServerUrl(),
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontFamily: 'monospace',
+                      color: Color(0xFF1F2937),
+                    ),
+                  ),
+                ),
+                SizedBox(height: 20),
+                Text(
+                  'Custom Server URL:',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF374151),
+                  ),
+                ),
+                SizedBox(height: 8),
+                TextField(
+                  controller: serverUrlController,
+                  decoration: InputDecoration(
+                    hintText: 'http://192.168.1.100:8000',
+                    hintStyle: TextStyle(color: Colors.grey[400]),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(color: Color(0xFFD1D5DB)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(color: Color(0xFF2C6E91), width: 2),
+                    ),
+                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                    suffixIcon: IconButton(
+                      icon: Icon(Icons.clear, size: 20),
+                      onPressed: () {
+                        serverUrlController.clear();
+                      },
+                    ),
+                  ),
+                  style: TextStyle(fontSize: 13),
+                ),
+                SizedBox(height: 16),
+                Container(
+                  padding: EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Color(0xFFEFF6FF),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Color(0xFF2C6E91).withValues(alpha: 0.2)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.lightbulb_outline, color: Color(0xFF2C6E91), size: 18),
+                          SizedBox(width: 8),
+                          Text(
+                            'Setup Instructions:',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF1E3A8A),
+                            ),
+                          ),
+                        ],
+                      ),
+                      SizedBox(height: 8),
+                      _buildInstructionStep('1', 'Find your computer\'s IP address:\n   Windows: cmd → ipconfig → IPv4 Address\n   Example: 192.168.1.100'),
+                      SizedBox(height: 6),
+                      _buildInstructionStep('2', 'Ensure phone and computer are on the same Wi-Fi network'),
+                      SizedBox(height: 6),
+                      _buildInstructionStep('3', 'Make sure backend server is running on your computer'),
+                      SizedBox(height: 6),
+                      _buildInstructionStep('4', 'Enter URL as: http://YOUR_IP:8000'),
+                      SizedBox(height: 6),
+                      _buildInstructionStep('5', 'Test in phone browser: http://YOUR_IP:8000/health'),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+              child: Text(
+                'Cancel',
+                style: TextStyle(
+                  color: Color(0xFF6B7280),
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+            TextButton(
+              onPressed: () {
+                BackendServerManager.customServerUrl = null;
+                setState(() {});
+                Navigator.of(context).pop();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Reset to auto-detect: ${BackendServerManager.getServerUrl()}'),
+                    backgroundColor: Color(0xFF2C6E91),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              },
+              child: Text(
+                'Reset',
+                style: TextStyle(
+                  color: Color(0xFFEF4444),
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                String url = serverUrlController.text.trim();
+                if (url.isEmpty) {
+                  BackendServerManager.customServerUrl = null;
+                  setState(() {});
+                  Navigator.of(context).pop();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Using auto-detect: ${BackendServerManager.getServerUrl()}'),
+                      backgroundColor: Color(0xFF2C6E91),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                  return;
+                }
+
+                // Validate URL format
+                if (!url.startsWith('http://') && !url.startsWith('https://')) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('URL must start with http:// or https://'),
+                      backgroundColor: Colors.red,
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                  return;
+                }
+
+                // Remove trailing slash
+                if (url.endsWith('/')) {
+                  url = url.substring(0, url.length - 1);
+                }
+
+                // Set the custom URL
+                BackendServerManager.customServerUrl = url;
+
+                // Test connection
+                Navigator.of(context).pop();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Row(
+                      children: [
+                        SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                          ),
+                        ),
+                        SizedBox(width: 12),
+                        Text('Testing connection to $url...'),
+                      ],
+                    ),
+                    backgroundColor: Color(0xFF2C6E91),
+                    behavior: SnackBarBehavior.floating,
+                    duration: Duration(seconds: 5),
+                  ),
+                );
+
+                final isHealthy = await BackendServerManager.isServerHealthy();
+                ScaffoldMessenger.of(context).hideCurrentSnackBar();
+
+                if (isHealthy) {
+                  setState(() {});
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Row(
+                        children: [
+                          Icon(Icons.check_circle, color: Colors.white),
+                          SizedBox(width: 12),
+                          Expanded(child: Text('✓ Connected successfully!\nServer: $url')),
+                        ],
+                      ),
+                      backgroundColor: Colors.green,
+                      behavior: SnackBarBehavior.floating,
+                      duration: Duration(seconds: 3),
+                    ),
+                  );
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Row(
+                        children: [
+                          Icon(Icons.error_outline, color: Colors.white),
+                          SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              '✗ Cannot connect to server\n\nMake sure:\n• Server is running on your computer\n• Both devices are on same Wi-Fi\n• Firewall allows port 8000\n• URL is correct',
+                            ),
+                          ),
+                        ],
+                      ),
+                      backgroundColor: Colors.red,
+                      behavior: SnackBarBehavior.floating,
+                      duration: Duration(seconds: 6),
+                    ),
+                  );
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Color(0xFF2C6E91),
+                foregroundColor: Colors.white,
+                padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              child: Text(
+                'Save & Test',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildInstructionStep(String number, String text) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 20,
+          height: 20,
+          decoration: BoxDecoration(
+            color: Color(0xFF2C6E91),
+            shape: BoxShape.circle,
+          ),
+          child: Center(
+            child: Text(
+              number,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 11,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ),
+        SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            text,
+            style: TextStyle(
+              fontSize: 11,
+              color: Color(0xFF1E3A8A),
+              height: 1.4,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

@@ -236,12 +236,22 @@ class BackendServerManager {
     _startAttempts = 0;
   }
 
+  /// Custom server URL (set this to your computer's IP when using physical device)
+  /// Example: BackendServerManager.customServerUrl = 'http://192.168.1.100:8000';
+  static String? customServerUrl;
+
   /// Get the backend server URL based on platform
   static String getServerUrl() {
+    // If custom URL is set, use it (for physical devices)
+    if (customServerUrl != null && customServerUrl!.isNotEmpty) {
+      return customServerUrl!;
+    }
+
     if (kIsWeb) {
       return 'http://localhost:8000';
     } else if (Platform.isAndroid) {
       // For Android emulator: 10.0.2.2 maps to host machine's localhost
+      // For physical Android device: you need to set customServerUrl to your computer's IP
       return 'http://10.0.2.2:8000';
     } else if (Platform.isIOS) {
       // For iOS simulator: localhost works
@@ -250,6 +260,30 @@ class BackendServerManager {
       // Desktop platforms
       return 'http://localhost:8000';
     }
+  }
+
+  /// Get instructions for connecting from physical device
+  static String getPhysicalDeviceInstructions() {
+    return '''
+📱 RUNNING ON PHYSICAL DEVICE:
+
+1. Find your computer's IP address:
+   Windows: Open CMD and type "ipconfig" → Look for "IPv4 Address"
+   Example: 192.168.1.100
+
+2. Make sure:
+   - Your phone and computer are on the SAME Wi-Fi network
+   - Backend server is running on your computer
+   - Windows Firewall allows connections on port 8000
+
+3. Before starting the app, set the server URL:
+   BackendServerManager.customServerUrl = 'http://YOUR_COMPUTER_IP:8000';
+   Example: BackendServerManager.customServerUrl = 'http://192.168.1.100:8000';
+
+4. Test in browser on your phone:
+   Open: http://YOUR_COMPUTER_IP:8000/health
+   Should return: {"status": "healthy"}
+''';
   }
 
   /// Get the backend folder path
