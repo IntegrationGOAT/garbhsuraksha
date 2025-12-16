@@ -6,6 +6,8 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:async';
 import 'dart:io';
+import 'prediction_service.dart';
+import 'backend_server_manager.dart';
 
 void main() {
   runApp(const MyApp());
@@ -48,6 +50,10 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
   int _recordingDuration = 0;
   Timer? _recordingTimer;
 
+  // Analysis related variables
+  bool _isAnalyzing = false;
+  AnalysisResult? _analysisResult;
+
   @override
   void initState() {
     super.initState();
@@ -59,12 +65,63 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
       CurvedAnimation(parent: _animationController, curve: Curves.easeInOut),
     );
 
-    Future.delayed(const Duration(seconds: 1), () {
-      _animationController.forward().then((_) {
+    // Start loading screen, server, and then show app
+    _initializeApp();
+  }
+
+  Future<void> _initializeApp() async {
+    print('\n🏥 ========== GARBHSURAKSHA APP STARTING ==========');
+
+    // Show loading screen for at least 2 seconds
+    await Future.delayed(const Duration(seconds: 2));
+
+    // Start backend server automatically (only on desktop, not mobile/web)
+    if (!kIsWeb) {
+      if (Platform.isAndroid || Platform.isIOS) {
+        print('📱 Mobile platform detected');
+        print('⚠️  Server must be running on external machine');
+        print('   Expected server at: ${BackendServerManager.getServerUrl()}');
+
+        // Check if server is accessible
+        print('🔍 Checking for remote server...');
+        final serverAvailable = await BackendServerManager.isServerHealthy();
+
+        if (serverAvailable) {
+          print('✅ Remote server is accessible!');
+        } else {
+          print('❌ No server found. User will need to start it manually.');
+          print('   Instructions will be shown when analysis is attempted.');
+        }
+      } else {
+        print('💻 Desktop platform - attempting to start local server...');
+        print('   A new window will open with the backend server');
+
+        if (mounted) {
+        }
+
+        final serverStarted = await BackendServerManager.startServer();
+
+        if (serverStarted) {
+          print('✅ Backend server started successfully!');
+          print('   Keep the server window open while using the app');
+        } else {
+          print('⚠️  Backend server could not be started automatically');
+          print('   You can start it manually using START_SERVER.bat');
+        }
+      }
+    } else {
+      print('🌐 Web platform - server must be started manually');
+    }
+
+    print('=================================================\n');
+
+    // Complete loading animation
+    _animationController.forward().then((_) {
+      if (mounted) {
         setState(() {
           _isLoading = false;
         });
-      });
+      }
     });
   }
 
@@ -74,6 +131,12 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
     _gestationController.dispose();
     _audioRecorder.dispose();
     _recordingTimer?.cancel();
+
+    // Stop backend server when app closes
+    if (!kIsWeb) {
+      BackendServerManager.stopServer();
+    }
+
     super.dispose();
   }
 
@@ -166,22 +229,31 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
       _recordingTimer?.cancel();
       final path = await _audioRecorder.stop();
 
-      if (mounted) {
+      if (mounted && path != null) {
+        // Extract filename from path
+        String fileName = path.split('/').last.split('\\').last;
+        if (fileName.isEmpty) {
+          fileName = 'recording_${DateTime.now().millisecondsSinceEpoch}.wav';
+        }
+
         setState(() {
           _isRecording = false;
           _audioFilePath = path;
-          _audioFileName =
-              path?.split('/').last.split('\\').last ?? 'recording.wav';
+          _audioFileName = fileName;
           _recordingDuration = 0;
         });
 
+        print('Recording stopped - Path: $path, FileName: $fileName');
+
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Recording stopped successfully!'),
+          SnackBar(
+            content: Text('Recording stopped successfully!\n$fileName'),
             backgroundColor: Colors.green,
-            duration: Duration(seconds: 2),
+            duration: const Duration(seconds: 2),
           ),
         );
+      } else if (mounted) {
+        throw Exception('Recording path is null');
       }
     } catch (e) {
       print('Error stopping recording: $e');
@@ -201,7 +273,17 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
   }
 
   Future<void> _downloadAudioFile() async {
-    if (_audioFilePath == null) return;
+    if (_audioFilePath == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No audio file available to download'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
 
     try {
       final fileName = _audioFileName ?? 'recording.wav';
@@ -219,6 +301,12 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
           );
         }
         return;
+      }
+
+      // First check if source file exists
+      final sourceFile = File(_audioFilePath!);
+      if (!await sourceFile.exists()) {
+        throw Exception('Audio file not found. Please record again.');
       }
 
       if (Platform.isAndroid) {
@@ -289,7 +377,7 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Download cancelled'),
+              content: Text('Download cancelled - No folder selected'),
               backgroundColor: Colors.grey,
             ),
           );
@@ -298,12 +386,11 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
       }
 
       // Copy file to selected directory
-      final sourceFile = File(_audioFilePath!);
-      if (!await sourceFile.exists()) {
-        throw Exception('Source file not found');
-      }
-
       final newPath = '$selectedDirectory${Platform.pathSeparator}$fileName';
+
+      print('Copying from: $_audioFilePath');
+      print('Copying to: $newPath');
+
       await sourceFile.copy(newPath);
 
       if (mounted) {
@@ -318,11 +405,28 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
     } catch (e) {
       print('Download error: $e');
       if (mounted) {
+        String errorMessage = 'Failed to save file';
+
+        if (e.toString().contains('not found')) {
+          errorMessage = 'Audio file not found. Please record again.';
+        } else if (e.toString().contains('Permission denied')) {
+          errorMessage = 'Permission denied. Please grant storage permission.';
+        } else if (e.toString().contains('No such file')) {
+          errorMessage = 'Source file missing. Please record again.';
+        } else {
+          errorMessage = 'Failed to save file: ${e.toString()}';
+        }
+
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to save file: ${e.toString()}'),
+            content: Text(errorMessage),
             backgroundColor: Colors.red,
-            duration: const Duration(seconds: 3),
+            duration: const Duration(seconds: 4),
+            action: SnackBarAction(
+              label: 'Retry',
+              textColor: Colors.white,
+              onPressed: () => _downloadAudioFile(),
+            ),
           ),
         );
       }
@@ -519,6 +623,558 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
         );
       }
     }
+  }
+
+  Future<void> _analyzeAudio() async {
+    print('\n🔬 ========== ANALYZE AUDIO CALLED ==========');
+    print('🤰 Gestation period: $_gestationPeriod');
+    print('🎵 Audio file path: $_audioFilePath');
+    print('📊 Is analyzing: $_isAnalyzing');
+
+    // Validate inputs
+    if (_gestationPeriod.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('⚠️ Please enter gestation period first'),
+          backgroundColor: Colors.orange,
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    if (_audioFilePath == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('⚠️ Please record or upload audio first'),
+          backgroundColor: Colors.orange,
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      _isAnalyzing = true;
+      _analysisResult = null;
+    });
+
+    try {
+      print('🔍 Step 1: Checking server health...');
+
+      // Check if server is running
+      bool isServerRunning = await BackendServerManager.isServerHealthy();
+      print('   Server health: ${isServerRunning ? "✅ Healthy" : "❌ Not responding"}');
+
+      // If server not running, try to start it (desktop only)
+      if (!isServerRunning && !kIsWeb) {
+        if (Platform.isAndroid || Platform.isIOS) {
+          // Mobile platform - can't start server locally
+          print('📱 Mobile platform - server must be on external machine');
+
+          if (mounted) {
+            showDialog(
+              context: context,
+              barrierDismissible: false,
+              builder: (context) => AlertDialog(
+                title: const Row(
+                  children: [
+                    Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 32),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        'Server Not Running',
+                        style: TextStyle(fontSize: 20),
+                      ),
+                    ),
+                  ],
+                ),
+                content: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'The Python backend server must be running on your COMPUTER to analyze audio files.',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                      ),
+                      const SizedBox(height: 20),
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.blue[50],
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.blue[300]!, width: 2),
+                        ),
+                        child: const Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Icon(Icons.play_circle_filled, color: Colors.blue, size: 24),
+                                SizedBox(width: 8),
+                                Text(
+                                  'Quick Start',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 16,
+                                    color: Colors.blue,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            SizedBox(height: 12),
+                            Text(
+                              'On your COMPUTER:',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            SizedBox(height: 8),
+                            Text('1️⃣ Open Terminal/Command Prompt', style: TextStyle(fontSize: 13)),
+                            SizedBox(height: 4),
+                            Text('2️⃣ Run these commands:', style: TextStyle(fontSize: 13)),
+                            SizedBox(height: 8),
+                            Text(
+                              '   cd lib/backend\n'
+                              '   pip install -r requirements.txt\n'
+                              '   python api_server.py',
+                              style: TextStyle(
+                                fontFamily: 'monospace',
+                                fontSize: 12,
+                                color: Colors.black87,
+                              ),
+                            ),
+                            SizedBox(height: 12),
+                            Text('3️⃣ Wait for:', style: TextStyle(fontSize: 13)),
+                            SizedBox(height: 4),
+                            Text(
+                              '   "Uvicorn running on http://0.0.0.0:8000"',
+                              style: TextStyle(
+                                fontFamily: 'monospace',
+                                fontSize: 11,
+                                color: Colors.green,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            SizedBox(height: 12),
+                            Text('4️⃣ Keep terminal OPEN and click Retry!', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.amber[50],
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.amber[300]!),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.lightbulb, color: Colors.amber, size: 20),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Or double-click START_SERVER.bat in project folder',
+                                style: TextStyle(fontSize: 12, color: Colors.amber[900]),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        'Read: START_HERE_FIRST.txt for detailed help',
+                        style: TextStyle(fontSize: 11, color: Colors.grey[600], fontStyle: FontStyle.italic),
+                      ),
+                    ],
+                  ),
+                ),
+                actions: [
+                  OutlinedButton.icon(
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close),
+                    label: const Text('Cancel'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.grey[700],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                      _analyzeAudio();
+                    },
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('Retry'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blue[600],
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }
+
+          setState(() {
+            _isAnalyzing = false;
+          });
+          return;
+
+        } else {
+          // Desktop platform - try to start server
+          print('💻 Desktop - attempting to start server...');
+
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Row(
+                  children: [
+                    SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                      ),
+                    ),
+                    SizedBox(width: 16),
+                    Text('Starting backend server, please wait...'),
+                  ],
+                ),
+                backgroundColor: Colors.blue,
+                duration: Duration(seconds: 45),
+              ),
+            );
+          }
+
+          final serverStarted = await BackendServerManager.startServer();
+
+          if (serverStarted) {
+            isServerRunning = true;
+            print('✅ Server started successfully!');
+
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('✅ Server started successfully!'),
+                  backgroundColor: Colors.green,
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            }
+
+            // Give server a moment to fully initialize
+            await Future.delayed(const Duration(seconds: 2));
+
+          } else {
+            print('❌ Could not start server automatically');
+            throw Exception(
+              'Could not start backend server automatically.\n\n'
+              'Please start it manually:\n'
+              'Then try analyzing again.'
+            );
+          }
+        }
+      }
+
+      // Verify server is accessible one more time
+      if (!isServerRunning) {
+        print('❌ Server still not accessible, throwing error');
+        throw Exception(
+          'Backend server is not accessible.\n\n'
+          'Server URL: ${BackendServerManager.getServerUrl()}'
+        );
+      }
+
+      print('✅ Server is ready, proceeding with analysis...');
+      print('🔬 Step 2: Sending audio for analysis...');
+
+      // Analyze audio
+      final result = await PredictionService.analyzeAudio(
+        audioFilePath: _audioFilePath!,
+        gestationPeriod: _gestationPeriod,
+        audioBytes: _audioFileBytes,
+      );
+
+      print('✅ Analysis complete!');
+      print('   Prediction: ${result.predictedLabel}');
+      print('   Confidence: ${(result.confidence * 100).toStringAsFixed(2)}%');
+      print('=============================================\n');
+
+      setState(() {
+        _analysisResult = result;
+        _isAnalyzing = false;
+      });
+
+      // Show result dialog
+      if (mounted) {
+        _showAnalysisResultDialog(result);
+      }
+
+    } catch (e) {
+      print('❌ Analysis error: $e');
+      print('=============================================\n');
+
+      setState(() {
+        _isAnalyzing = false;
+      });
+
+      if (mounted) {
+        String errorMessage = e.toString();
+
+        // Make error messages user-friendly
+        if (errorMessage.contains('timeout') ||
+            errorMessage.contains('TimeoutException')) {
+          errorMessage = '⏱️ Request Timeout\n\n'
+              'The server took too long to respond.\n\n'
+              'Please check:\n'
+              '• Server is running\n'
+              '• Network connection is stable\n'
+              '• Audio file is not too large';
+        } else if (errorMessage.contains('Connection refused') ||
+                   errorMessage.contains('Failed host lookup')) {
+          errorMessage = '🔌 Connection Failed\n\n'
+              'Could not connect to server.\n\n'
+              'Please ensure:\n'
+              '• Server is running at ${BackendServerManager.getServerUrl()}\n'
+              '• No firewall is blocking the connection\n'
+              '• You are on the same network (for mobile)';
+        } else if (errorMessage.contains('SocketException')) {
+          errorMessage = '🌐 Network Error\n\n'
+              'Please check your network connection and try again.';
+        }
+
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Row(
+              children: [
+                Icon(Icons.error_outline, color: Colors.red, size: 28),
+                SizedBox(width: 12),
+                Text('Analysis Error'),
+              ],
+            ),
+            content: SingleChildScrollView(
+              child: Text(
+                errorMessage.replaceAll('Exception: ', ''),
+                style: const TextStyle(fontSize: 14),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Close'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  _analyzeAudio(); // Retry
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue[700],
+                  foregroundColor: Colors.white,
+                ),
+                child: const Text('Retry'),
+              ),
+            ],
+          ),
+        );
+      }
+    }
+  }
+
+  void _showAnalysisResultDialog(AnalysisResult result) {
+    final bool isNormal = result.status == 'healthy';
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(
+              isNormal ? Icons.check_circle : Icons.warning,
+              color: isNormal ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+              size: 32,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                isNormal ? 'Normal Result' : 'Abnormality Detected',
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 20,
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Prediction
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: isNormal
+                    ? const Color(0xFFD1FAE5)
+                    : const Color(0xFFFEF3C7),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: isNormal
+                      ? const Color(0xFF10B981)
+                      : const Color(0xFFF59E0B),
+                    width: 2,
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Prediction: ${result.predictedLabel}',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: isNormal
+                          ? const Color(0xFF065F46)
+                          : const Color(0xFF92400E),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Confidence: ${(result.confidence * 100).toStringAsFixed(1)}%',
+                      style: TextStyle(
+                        fontSize: 16,
+                        color: isNormal
+                          ? const Color(0xFF047857)
+                          : const Color(0xFFB45309),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // Message
+              Text(
+                result.message,
+                style: const TextStyle(fontSize: 16),
+              ),
+              const SizedBox(height: 16),
+
+              // Recommendation
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEFF6FF),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: const Color(0xFF2C6E91),
+                  ),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(
+                      Icons.info_outline,
+                      color: Color(0xFF2C6E91),
+                      size: 20,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        result.recommendation,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Color(0xFF1E3A8A),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // Probabilities
+              const Text(
+                'Detailed Probabilities:',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+              const SizedBox(height: 8),
+              ...result.probabilities.entries.map((entry) {
+                final percentage = (entry.value * 100).toStringAsFixed(1);
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        flex: 2,
+                        child: Text(
+                          entry.key,
+                          style: const TextStyle(fontSize: 14),
+                        ),
+                      ),
+                      Expanded(
+                        flex: 3,
+                        child: LinearProgressIndicator(
+                          value: entry.value,
+                          backgroundColor: Colors.grey[200],
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            entry.key == 'Normal'
+                              ? const Color(0xFF10B981)
+                              : const Color(0xFFF59E0B),
+                          ),
+                          minHeight: 8,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 50,
+                        child: Text(
+                          '$percentage%',
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }).toList(),
+
+              const SizedBox(height: 16),
+
+              // Gestation period
+              Text(
+                'Gestation Period: ${result.gestationPeriod}',
+                style: const TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ],
+          ),
+        ),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -1418,58 +2074,36 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                           const SizedBox(width: 10),
                                           Expanded(
                                             child: ElevatedButton.icon(
-                                              onPressed: () {
-                                                showDialog(
-                                                  context: context,
-                                                  builder: (context) => AlertDialog(
-                                                    title: const Row(
-                                                      children: [
-                                                        Icon(
-                                                          Icons.check_circle,
-                                                          color: Color(
-                                                            0xFF10B981,
-                                                          ),
-                                                          size: 28,
-                                                        ),
-                                                        SizedBox(width: 12),
-                                                        Text(
-                                                          'Audio Ready',
-                                                          style: TextStyle(
-                                                            fontWeight:
-                                                                FontWeight.w600,
-                                                          ),
-                                                        ),
-                                                      ],
-                                                    ),
-                                                    content: Text(
-                                                      'Audio file prepared successfully!\n\n'
-                                                      'Gestation Period: $_gestationPeriod\n'
-                                                      'File: ${_audioFileName ?? "recording"}',
-                                                    ),
-                                                    shape: RoundedRectangleBorder(
-                                                      borderRadius:
-                                                          BorderRadius.circular(
-                                                            12,
-                                                          ),
-                                                    ),
-                                                    actions: [
-                                                      TextButton(
-                                                        onPressed: () =>
-                                                            Navigator.pop(
-                                                              context,
-                                                            ),
-                                                        child: const Text('OK'),
+                                              onPressed: (_audioFilePath != null &&
+                                                      _gestationPeriod
+                                                          .isNotEmpty &&
+                                                      !_isAnalyzing)
+                                                  ? () {
+                                                      print('ANALYZE BUTTON PRESSED');
+                                                      print('Audio path: $_audioFilePath');
+                                                      print('Gestation: $_gestationPeriod');
+                                                      _analyzeAudio();
+                                                    }
+                                                  : null,
+                                              icon: _isAnalyzing
+                                                  ? SizedBox(
+                                                      width: 18,
+                                                      height: 18,
+                                                      child:
+                                                          CircularProgressIndicator(
+                                                        strokeWidth: 2,
+                                                        valueColor:
+                                                            AlwaysStoppedAnimation<Color>(Colors.white),
                                                       ),
-                                                    ],
-                                                  ),
-                                                );
-                                              },
-                                              icon: const Icon(
-                                                Icons.analytics_outlined,
-                                                size: 18,
-                                              ),
-                                              label: const Text(
-                                                "Analyze",
+                                                    )
+                                                  : const Icon(
+                                                      Icons.analytics_outlined,
+                                                      size: 18,
+                                                    ),
+                                              label: Text(
+                                                _isAnalyzing
+                                                    ? "Processing..."
+                                                    : "AI Overview",
                                                 style: const TextStyle(
                                                   fontSize: 14,
                                                   fontWeight: FontWeight.w600,
@@ -1710,9 +2344,42 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                         child: ClipRRect(
                           borderRadius: BorderRadius.circular(12),
                           child: Image.network(
-                            "https://media.istockphoto.com/id/1410084181/vector/pregnant-woman-silhouette-continuous-line.jpg?s=612x612&w=0&k=20&c=v_tPP5Av4wm6oz84LRRdK0C9lM6WGKox3_3AlTfTkhQ=",
-                            fit: BoxFit.contain,
-                            alignment: Alignment.center,
+                            'https://static.vecteezy.com/system/resources/thumbnails/000/585/705/small/5-08.jpg',
+                            fit: BoxFit.cover,
+                            loadingBuilder: (context, child, loadingProgress) {
+                              if (loadingProgress == null) return child;
+                              return Center(
+                                child: CircularProgressIndicator(
+                                  value: loadingProgress.expectedTotalBytes != null
+                                      ? loadingProgress.cumulativeBytesLoaded /
+                                          loadingProgress.expectedTotalBytes!
+                                      : null,
+                                  color: const Color(0xFF6366F1),
+                                ),
+                              );
+                            },
+                            errorBuilder: (context, error, stackTrace) {
+                              return Container(
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                    colors: [
+                                      const Color(0xFF6366F1).withValues(alpha: 0.1),
+                                      const Color(0xFF8B5CF6).withValues(alpha: 0.1),
+                                    ],
+                                  ),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: const Center(
+                                  child: Icon(
+                                    Icons.pregnant_woman,
+                                    size: 100,
+                                    color: Color(0xFF6366F1),
+                                  ),
+                                ),
+                              );
+                            },
                           ),
                         ),
                       ),
@@ -1766,12 +2433,31 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                     const SizedBox(
                       width: 32,
                       height: 32,
-
                       child: CircularProgressIndicator(
                         color: Color(0xFF2C6E91),
                         strokeWidth: 3,
                       ),
                     ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      "Initializing...",
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Color(0xFF6B7280),
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    if (!kIsWeb)
+                      const SizedBox(height: 4),
+                    if (!kIsWeb)
+                      const Text(
+                        "Starting backend server",
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF9CA3AF),
+                          fontWeight: FontWeight.w400,
+                        ),
+                      ),
                   ],
                 ),
               ),
