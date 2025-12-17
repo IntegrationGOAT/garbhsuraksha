@@ -895,6 +895,153 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                       ),
                       const SizedBox(height: 12),
 
+                      // Show Bradycardia if detected (decreased heart rate)
+                      if (result.fhrAnalysis!.bradycardiaChance > 0) ...[
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFEFF6FF),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: const Color(0xFF3B82F6),
+                              width: 1.5,
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  const Icon(
+                                    Icons.arrow_downward,
+                                    color: Color(0xFF3B82F6),
+                                    size: 20,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  FutureBuilder<String>(
+                                    future: _translate('Decreased Heart Rate Detected'),
+                                    initialData: 'Decreased Heart Rate Detected',
+                                    builder: (context, snapshot) {
+                                      return Text(
+                                        snapshot.data ?? 'Decreased Heart Rate Detected',
+                                        style: const TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.bold,
+                                          color: Color(0xFF1E40AF),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              FutureBuilder<String>(
+                                future: _translate('Bradycardia: ${result.fhrAnalysis!.bradycardiaChance.toStringAsFixed(1)}%'),
+                                initialData: 'Bradycardia: ${result.fhrAnalysis!.bradycardiaChance.toStringAsFixed(1)}%',
+                                builder: (context, snapshot) {
+                                  return Text(
+                                    snapshot.data ?? 'Bradycardia: ${result.fhrAnalysis!.bradycardiaChance.toStringAsFixed(1)}%',
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color: Color(0xFF1E40AF),
+                                    ),
+                                  );
+                                },
+                              ),
+                              const SizedBox(height: 4),
+                              FutureBuilder<String>(
+                                future: _translate('The fetus has a slower than normal heart rate'),
+                                initialData: 'The fetus has a slower than normal heart rate',
+                                builder: (context, snapshot) {
+                                  return Text(
+                                    snapshot.data ?? 'The fetus has a slower than normal heart rate',
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      color: Color(0xFF64748B),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
+
+                      // Show Tachycardia if detected (increased heart rate)
+                      if (result.fhrAnalysis!.tachycardiaChance > 0) ...[
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFEF3C7),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: const Color(0xFFF59E0B),
+                              width: 1.5,
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  const Icon(
+                                    Icons.arrow_upward,
+                                    color: Color(0xFFF59E0B),
+                                    size: 20,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  FutureBuilder<String>(
+                                    future: _translate('Increased Heart Rate Detected'),
+                                    initialData: 'Increased Heart Rate Detected',
+                                    builder: (context, snapshot) {
+                                      return Text(
+                                        snapshot.data ?? 'Increased Heart Rate Detected',
+                                        style: const TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.bold,
+                                          color: Color(0xFFD97706),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              FutureBuilder<String>(
+                                future: _translate('Tachycardia: ${result.fhrAnalysis!.tachycardiaChance.toStringAsFixed(1)}%'),
+                                initialData: 'Tachycardia: ${result.fhrAnalysis!.tachycardiaChance.toStringAsFixed(1)}%',
+                                builder: (context, snapshot) {
+                                  return Text(
+                                    snapshot.data ?? 'Tachycardia: ${result.fhrAnalysis!.tachycardiaChance.toStringAsFixed(1)}%',
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color: Color(0xFFD97706),
+                                    ),
+                                  );
+                                },
+                              ),
+                              const SizedBox(height: 4),
+                              FutureBuilder<String>(
+                                future: _translate('The fetus has a faster than normal heart rate'),
+                                initialData: 'The fetus has a faster than normal heart rate',
+                                builder: (context, snapshot) {
+                                  return Text(
+                                    snapshot.data ?? 'The fetus has a faster than normal heart rate',
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      color: Color(0xFF64748B),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
 
                       // Medical Concern
                       if (result.fhrAnalysis!.medicalConcern.toLowerCase() == 'yes')
@@ -934,13 +1081,6 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                 const SizedBox(height: 16),
               ],
 
-              // Message
-              Text(
-                result.message,
-                style: const TextStyle(fontSize: 16),
-              ),
-              const SizedBox(height: 16),
-
               // Recommendation
               Container(
                 padding: const EdgeInsets.all(12),
@@ -974,56 +1114,202 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
               ),
               const SizedBox(height: 16),
 
-              // Probabilities
+              // Confidence/Prediction Results
               const Text(
-                'Detailed Probabilities:',
+                'Analysis Confidence:',
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
                   fontSize: 16,
                 ),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 12),
+
+              // Show Normal and Abnormal probabilities
               ...result.probabilities.entries.map((entry) {
                 final percentage = (entry.value * 100).toStringAsFixed(1);
+                final isNormal = entry.key.toLowerCase() == 'normal';
                 return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: isNormal
+                          ? const Color(0xFFECFDF5)
+                          : const Color(0xFFFEF2F2),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: isNormal
+                            ? const Color(0xFF10B981)
+                            : const Color(0xFFEF4444),
+                        width: 1.5,
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              isNormal
+                                  ? Icons.check_circle_outline
+                                  : Icons.warning_amber_rounded,
+                              color: isNormal
+                                  ? const Color(0xFF10B981)
+                                  : const Color(0xFFEF4444),
+                              size: 20,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              entry.key,
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.bold,
+                                color: isNormal
+                                    ? const Color(0xFF065F46)
+                                    : const Color(0xFF991B1B),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Expanded(
+                              flex: 3,
+                              child: LinearProgressIndicator(
+                                value: entry.value,
+                                backgroundColor: Colors.grey[200],
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  isNormal
+                                      ? const Color(0xFF10B981)
+                                      : const Color(0xFFEF4444),
+                                ),
+                                minHeight: 10,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Text(
+                              '$percentage%',
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.bold,
+                                color: isNormal
+                                    ? const Color(0xFF065F46)
+                                    : const Color(0xFF991B1B),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }).toList(),
+
+              const SizedBox(height: 8),
+
+              // Heart Rate Conditions
+              const Text(
+                'Heart Rate Conditions:',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              // Bradycardia Section - Red if detected, Green if not
+              if (result.fhrAnalysis != null) ...[
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: result.fhrAnalysis!.bradycardiaChance > 0
+                        ? const Color(0xFFFEF2F2)
+                        : const Color(0xFFECFDF5),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: result.fhrAnalysis!.bradycardiaChance > 0
+                          ? const Color(0xFFEF4444)
+                          : const Color(0xFF10B981),
+                      width: 1.5,
+                    ),
+                  ),
                   child: Row(
                     children: [
-                      Expanded(
-                        flex: 2,
-                        child: Text(
-                          entry.key,
-                          style: const TextStyle(fontSize: 14),
-                        ),
-                      ),
-                      Expanded(
-                        flex: 3,
-                        child: LinearProgressIndicator(
-                          value: entry.value,
-                          backgroundColor: Colors.grey[200],
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            entry.key == 'Normal'
-                              ? const Color(0xFF10B981)
-                              : const Color(0xFFF59E0B),
-                          ),
-                          minHeight: 8,
-                        ),
+                      Icon(
+                        result.fhrAnalysis!.bradycardiaChance > 0
+                            ? Icons.arrow_downward
+                            : Icons.check_circle_outline,
+                        color: result.fhrAnalysis!.bradycardiaChance > 0
+                            ? const Color(0xFFEF4444)
+                            : const Color(0xFF10B981),
+                        size: 20,
                       ),
                       const SizedBox(width: 8),
-                      SizedBox(
-                        width: 50,
+                      Expanded(
                         child: Text(
-                          '$percentage%',
-                          style: const TextStyle(
+                          result.fhrAnalysis!.bradycardiaChance > 0
+                              ? 'Bradycardia Detected (${result.fhrAnalysis!.bradycardiaChance.toStringAsFixed(1)}%)'
+                              : 'No Bradycardia Detected',
+                          style: TextStyle(
                             fontSize: 14,
-                            fontWeight: FontWeight.w500,
+                            fontWeight: FontWeight.w600,
+                            color: result.fhrAnalysis!.bradycardiaChance > 0
+                                ? const Color(0xFF991B1B)
+                                : const Color(0xFF065F46),
                           ),
                         ),
                       ),
                     ],
                   ),
-                );
-              }).toList(),
+                ),
+                const SizedBox(height: 12),
+
+                // Tachycardia Section - Red if detected, Green if not
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: result.fhrAnalysis!.tachycardiaChance > 0
+                        ? const Color(0xFFFEF2F2)
+                        : const Color(0xFFECFDF5),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: result.fhrAnalysis!.tachycardiaChance > 0
+                          ? const Color(0xFFEF4444)
+                          : const Color(0xFF10B981),
+                      width: 1.5,
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        result.fhrAnalysis!.tachycardiaChance > 0
+                            ? Icons.arrow_upward
+                            : Icons.check_circle_outline,
+                        color: result.fhrAnalysis!.tachycardiaChance > 0
+                            ? const Color(0xFFEF4444)
+                            : const Color(0xFF10B981),
+                        size: 20,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          result.fhrAnalysis!.tachycardiaChance > 0
+                              ? 'Tachycardia Detected (${result.fhrAnalysis!.tachycardiaChance.toStringAsFixed(1)}%)'
+                              : 'No Tachycardia Detected',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: result.fhrAnalysis!.tachycardiaChance > 0
+                                ? const Color(0xFF991B1B)
+                                : const Color(0xFF065F46),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
 
               const SizedBox(height: 16),
 
@@ -2642,24 +2928,43 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                           ],
                         ),
                         padding: const EdgeInsets.all(24),
-                        child: Container(
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                              colors: [
-                                const Color(0xFF6366F1).withValues(alpha: 0.1),
-                                const Color(0xFF8B5CF6).withValues(alpha: 0.1),
-                              ],
-                            ),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: const Center(
-                            child: Icon(
-                              Icons.pregnant_woman,
-                              size: 100,
-                              color: Color(0xFF6366F1),
-                            ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: Image.network(
+                            'https://static.vecteezy.com/system/resources/thumbnails/000/585/705/small/5-08.jpg',
+                            fit: BoxFit.contain,
+                            loadingBuilder: (context, child, loadingProgress) {
+                              if (loadingProgress == null) return child;
+                              return const Center(
+                                child: CircularProgressIndicator(
+                                  color: Color(0xFF6366F1),
+                                  strokeWidth: 3,
+                                ),
+                              );
+                            },
+                            errorBuilder: (context, error, stackTrace) {
+                              // Fallback to icon if image fails to load
+                              return Container(
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                    colors: [
+                                      const Color(0xFF6366F1).withValues(alpha: 0.1),
+                                      const Color(0xFF8B5CF6).withValues(alpha: 0.1),
+                                    ],
+                                  ),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: const Center(
+                                  child: Icon(
+                                    Icons.pregnant_woman,
+                                    size: 100,
+                                    color: Color(0xFF6366F1),
+                                  ),
+                                ),
+                              );
+                            },
                           ),
                         ),
                       ),
