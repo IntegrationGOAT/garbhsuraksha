@@ -8,6 +8,7 @@ import 'dart:async';
 import 'dart:io';
 import 'prediction_service.dart';
 import 'backend_server_manager.dart';
+import 'package:translator/translator.dart';
 
 void main() {
   runApp(const MyApp());
@@ -53,6 +54,13 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
   // Analysis related variables
   bool _isAnalyzing = false;
   AnalysisResult? _analysisResult;
+
+  // Translation variables
+  final GoogleTranslator _translator = GoogleTranslator();
+  String _selectedLanguageCode = 'en';
+  String _selectedLanguageName = 'English';
+  final Map<String, String> _translationCache = {};
+  final Map<String, Future<String>> _translationFutures = {};
 
   @override
   void initState() {
@@ -584,158 +592,53 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
     try {
       print('🔍 Step 1: Checking server health...');
 
-      // Check if server is running
-      bool isServerRunning = await BackendServerManager.isServerHealthy();
-      print('   Server health: ${isServerRunning ? "✅ Healthy" : "❌ Not responding"}');
+      // Check if server is running with multiple attempts
+      bool isServerRunning = false;
+      int maxAttempts = 3;
 
-      // If server not running, try to start it (desktop only)
-      if (!isServerRunning && !kIsWeb) {
-        if (Platform.isAndroid || Platform.isIOS) {
-          // Mobile platform - can't start server locally
-          print('📱 Mobile platform - server must be on external machine');
+      for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+        print('   Attempt $attempt/$maxAttempts...');
+        isServerRunning = await BackendServerManager.isServerHealthy();
 
-          if (mounted) {
-            showDialog(
-              context: context,
-              barrierDismissible: false,
-              builder: (context) => AlertDialog(
-                title: const Row(
-                  children: [
-                    Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 32),
-                    SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        'Server Not Running',
-                        style: TextStyle(fontSize: 20),
-                      ),
-                    ),
-                  ],
-                ),
-                content: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'The backend server is currently unavailable.',
-                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-                      ),
-                      const SizedBox(height: 20),
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Colors.blue[50],
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.blue[300]!, width: 2),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Icon(Icons.cloud_off, color: Colors.blue, size: 24),
-                                SizedBox(width: 8),
-                                Text(
-                                  'Connection Issue',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 16,
-                                    color: Colors.blue,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            SizedBox(height: 12),
-                            Text(
-                              'Server URL:',
-                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                            ),
-                            SizedBox(height: 4),
-                            Text(
-                              BackendServerManager.getServerUrl(),
-                              style: TextStyle(
-                                fontFamily: 'monospace',
-                                fontSize: 11,
-                                color: Colors.blue[900],
-                              ),
-                            ),
-                            SizedBox(height: 12),
-                            Text('Please check:', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
-                            SizedBox(height: 8),
-                            Text('1️⃣ Internet connection is active', style: TextStyle(fontSize: 13)),
-                            SizedBox(height: 4),
-                            Text('2️⃣ Railway server is running', style: TextStyle(fontSize: 13)),
-                            SizedBox(height: 4),
-                            Text('3️⃣ No firewall is blocking HTTPS', style: TextStyle(fontSize: 13)),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.amber[50],
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: Colors.amber[300]!),
-                        ),
-                        child: Row(
-                          children: [
-                            const Icon(Icons.info_outline, color: Colors.amber, size: 20),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                'Click Retry after checking your connection',
-                                style: TextStyle(fontSize: 12, color: Colors.amber[900]),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                actions: [
-                  OutlinedButton.icon(
-                    onPressed: () => Navigator.of(context).pop(),
-                    icon: const Icon(Icons.close),
-                    label: const Text('Cancel'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: Colors.grey[700],
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  ElevatedButton.icon(
-                    onPressed: () {
-                      Navigator.of(context).pop();
-                      _analyzeAudio();
-                    },
-                    icon: const Icon(Icons.refresh),
-                    label: const Text('Retry'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blue[600],
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                    ),
-                  ),
-                ],
-              ),
-            );
+        if (isServerRunning) {
+          print('   Server health: ✅ Healthy');
+          break;
+        } else {
+          print('   Server health: ❌ Not responding');
+          if (attempt < maxAttempts) {
+            print('   Waiting 2 seconds before retry...');
+            await Future.delayed(const Duration(seconds: 2));
           }
-
-          setState(() {
-            _isAnalyzing = false;
-          });
-          return;
         }
       }
 
-      // Verify server is accessible one more time
+      // If server not running after all attempts
       if (!isServerRunning) {
-        print('❌ Server still not accessible, throwing error');
-        throw Exception(
-          'Backend server is not accessible.\n\n'
-          'Server URL: ${BackendServerManager.getServerUrl()}'
-        );
+        print('❌ Server not accessible after $maxAttempts attempts');
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text(
+                '⚠️ Backend server not responding. Please check your internet connection.',
+              ),
+              backgroundColor: Colors.orange,
+              duration: const Duration(seconds: 4),
+              action: SnackBarAction(
+                label: 'Retry',
+                textColor: Colors.white,
+                onPressed: () {
+                  _analyzeAudio();
+                },
+              ),
+            ),
+          );
+        }
+
+        setState(() {
+          _isAnalyzing = false;
+        });
+        return;
       }
 
       print('✅ Server is ready, proceeding with analysis...');
@@ -935,6 +838,102 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
               ),
               const SizedBox(height: 16),
 
+              // Heart Rate Analysis Section
+              if (result.fhrAnalysis != null) ...[
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFEFF6FF),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: const Color(0xFF2C6E91),
+                      width: 1.5,
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(
+                            Icons.favorite,
+                            color: Color(0xFF2C6E91),
+                            size: 24,
+                          ),
+                          const SizedBox(width: 8),
+                          FutureBuilder<String>(
+                            future: _translate('Heart Rate Analysis'),
+                            initialData: 'Heart Rate Analysis',
+                            builder: (context, snapshot) {
+                              return Text(
+                                snapshot.data ?? 'Heart Rate Analysis',
+                                style: const TextStyle(
+                                  fontSize: 17,
+                                  fontWeight: FontWeight.bold,
+                                  color: Color(0xFF1E3A8A),
+                                ),
+                              );
+                            },
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+
+                      // Average FHR
+                      _buildHeartRateInfoRow(
+                        'Average Heart Rate:',
+                        '${result.fhrAnalysis!.measuredFhr.toStringAsFixed(1)} bpm',
+                        Icons.monitor_heart_outlined,
+                      ),
+                      const SizedBox(height: 8),
+
+                      // Normal Range
+                      _buildHeartRateInfoRow(
+                        'Normal Range:',
+                        '${result.fhrAnalysis!.normalRangeMin}-${result.fhrAnalysis!.normalRangeMax} bpm',
+                        Icons.equalizer,
+                      ),
+                      const SizedBox(height: 12),
+
+
+                      // Medical Concern
+                      if (result.fhrAnalysis!.medicalConcern.toLowerCase() == 'yes')
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFEF2F2),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: const Color(0xFFEF4444),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(
+                                Icons.medical_services,
+                                color: Color(0xFFEF4444),
+                                size: 18,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'Medical attention may be required',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF991B1B),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ],
+
               // Message
               Text(
                 result.message,
@@ -1053,6 +1052,335 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
     );
   }
 
+  // Helper widget for heart rate info rows
+  Widget _buildHeartRateInfoRow(String label, String value, IconData icon) {
+    return Row(
+      children: [
+        Icon(icon, size: 16, color: const Color(0xFF2C6E91)),
+        const SizedBox(width: 6),
+        Expanded(
+          child: FutureBuilder<String>(
+            future: _translate(label),
+            initialData: label,
+            builder: (context, snapshot) {
+              return Text(
+                snapshot.data ?? label,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFF374151),
+                ),
+              );
+            },
+          ),
+        ),
+        Flexible(
+          child: FutureBuilder<String>(
+            future: _translate(value),
+            initialData: value,
+            builder: (context, snapshot) {
+              return Text(
+                snapshot.data ?? value,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF1F2937),
+                ),
+                textAlign: TextAlign.right,
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  // Helper widget for probability bars
+  Widget _buildProbabilityBar(String label, double percentage, Color color) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            FutureBuilder<String>(
+              future: _translate(label),
+              initialData: label,
+              builder: (context, snapshot) {
+                return Text(
+                  snapshot.data ?? label,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: Color(0xFF374151),
+                  ),
+                );
+              },
+            ),
+            Text(
+              '${percentage.toStringAsFixed(1)}%',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: color,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: LinearProgressIndicator(
+            value: percentage / 100,
+            backgroundColor: Colors.grey[200],
+            valueColor: AlwaysStoppedAnimation<Color>(color),
+            minHeight: 6,
+          ),
+        ),
+      ],
+    );
+  }
+
+  // Helper method to get risk color
+  Color _getRiskColor(String riskLevel) {
+    switch (riskLevel.toLowerCase()) {
+      case 'low':
+        return const Color(0xFF10B981);
+      case 'medium':
+      case 'moderate':
+        return const Color(0xFFF59E0B);
+      case 'high':
+        return const Color(0xFFEF4444);
+      default:
+        return const Color(0xFF6B7280);
+    }
+  }
+
+  // Helper method to get risk icon
+  IconData _getRiskIcon(String riskLevel) {
+    switch (riskLevel.toLowerCase()) {
+      case 'low':
+        return Icons.check_circle_outline;
+      case 'medium':
+      case 'moderate':
+        return Icons.warning_amber_outlined;
+      case 'high':
+        return Icons.error_outline;
+      default:
+        return Icons.help_outline;
+    }
+  }
+
+  // Translation methods
+  Future<String> _translate(String text) async {
+    if (_selectedLanguageCode == 'en' || text.isEmpty) {
+      return text;
+    }
+
+    final cacheKey = '$text|$_selectedLanguageCode';
+
+    // Return cached translation if available
+    if (_translationCache.containsKey(cacheKey)) {
+      return _translationCache[cacheKey]!;
+    }
+
+    // Return existing future if translation is in progress
+    if (_translationFutures.containsKey(cacheKey)) {
+      return _translationFutures[cacheKey]!;
+    }
+
+    // Create new translation future
+    final future = _performTranslation(text, cacheKey);
+    _translationFutures[cacheKey] = future;
+
+    return future;
+  }
+
+  Future<String> _performTranslation(String text, String cacheKey) async {
+    try {
+      final translation = await _translator.translate(
+        text,
+        from: 'en',
+        to: _selectedLanguageCode,
+      );
+      _translationCache[cacheKey] = translation.text;
+      _translationFutures.remove(cacheKey); // Remove future once complete
+      return translation.text;
+    } catch (e) {
+      print('Translation error: $e');
+      _translationFutures.remove(cacheKey); // Remove future on error
+      return text;
+    }
+  }
+
+  void _showLanguageSelector() {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return Dialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Container(
+            constraints: const BoxConstraints(maxHeight: 600, maxWidth: 400),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF2C6E91),
+                    borderRadius: BorderRadius.only(
+                      topLeft: Radius.circular(16),
+                      topRight: Radius.circular(16),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.translate, color: Colors.white),
+                      const SizedBox(width: 12),
+                      const Text(
+                        'Select Language',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const Spacer(),
+                      IconButton(
+                        icon: const Icon(Icons.close, color: Colors.white),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                    ],
+                  ),
+                ),
+                Flexible(
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: _getLanguageList().map((lang) {
+                      return ListTile(
+                        leading: Icon(
+                          Icons.language,
+                          color: _selectedLanguageCode == lang['code']
+                              ? const Color(0xFF2C6E91)
+                              : Colors.grey,
+                        ),
+                        title: Text(
+                          lang['name']!,
+                          style: TextStyle(
+                            fontWeight: _selectedLanguageCode == lang['code']
+                                ? FontWeight.bold
+                                : FontWeight.normal,
+                            color: _selectedLanguageCode == lang['code']
+                                ? const Color(0xFF2C6E91)
+                                : Colors.black87,
+                          ),
+                        ),
+                        trailing: _selectedLanguageCode == lang['code']
+                            ? const Icon(Icons.check, color: Color(0xFF2C6E91))
+                            : null,
+                        onTap: () {
+                          setState(() {
+                            _selectedLanguageCode = lang['code']!;
+                            _selectedLanguageName = lang['name']!;
+                            _translationCache.clear();
+                            _translationFutures.clear();
+                          });
+                          Navigator.pop(context);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Language changed to ${lang['name']}'),
+                              duration: const Duration(seconds: 2),
+                              backgroundColor: const Color(0xFF2C6E91),
+                            ),
+                          );
+                        },
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  List<Map<String, String>> _getLanguageList() {
+    return [
+      {'code': 'en', 'name': 'English'},
+      {'code': 'hi', 'name': 'Hindi (हिंदी)'},
+      {'code': 'bn', 'name': 'Bengali (বাংলা)'},
+      {'code': 'te', 'name': 'Telugu (తెలుగు)'},
+      {'code': 'mr', 'name': 'Marathi (मराठी)'},
+      {'code': 'ta', 'name': 'Tamil (தமிழ்)'},
+      {'code': 'gu', 'name': 'Gujarati (ગુજરાતી)'},
+      {'code': 'kn', 'name': 'Kannada (ಕನ್ನಡ)'},
+      {'code': 'ml', 'name': 'Malayalam (മലയാളം)'},
+      {'code': 'pa', 'name': 'Punjabi (ਪੰਜਾਬੀ)'},
+      {'code': 'or', 'name': 'Odia (ଓଡ଼ିଆ)'},
+      {'code': 'ur', 'name': 'Urdu (اردو)'},
+      {'code': 'es', 'name': 'Spanish (Español)'},
+      {'code': 'fr', 'name': 'French (Français)'},
+      {'code': 'de', 'name': 'German (Deutsch)'},
+      {'code': 'zh-CN', 'name': 'Chinese Simplified (简体中文)'},
+      {'code': 'zh-TW', 'name': 'Chinese Traditional (繁體中文)'},
+      {'code': 'ja', 'name': 'Japanese (日本語)'},
+      {'code': 'ko', 'name': 'Korean (한국어)'},
+      {'code': 'ar', 'name': 'Arabic (العربية)'},
+      {'code': 'ru', 'name': 'Russian (Русский)'},
+      {'code': 'pt', 'name': 'Portuguese (Português)'},
+      {'code': 'it', 'name': 'Italian (Italiano)'},
+      {'code': 'nl', 'name': 'Dutch (Nederlands)'},
+      {'code': 'tr', 'name': 'Turkish (Türkçe)'},
+      {'code': 'vi', 'name': 'Vietnamese (Tiếng Việt)'},
+      {'code': 'th', 'name': 'Thai (ไทย)'},
+      {'code': 'id', 'name': 'Indonesian (Bahasa Indonesia)'},
+      {'code': 'ms', 'name': 'Malay (Bahasa Melayu)'},
+      {'code': 'pl', 'name': 'Polish (Polski)'},
+      {'code': 'uk', 'name': 'Ukrainian (Українська)'},
+      {'code': 'ro', 'name': 'Romanian (Română)'},
+      {'code': 'cs', 'name': 'Czech (Čeština)'},
+      {'code': 'el', 'name': 'Greek (Ελληνικά)'},
+      {'code': 'sv', 'name': 'Swedish (Svenska)'},
+      {'code': 'da', 'name': 'Danish (Dansk)'},
+      {'code': 'fi', 'name': 'Finnish (Suomi)'},
+      {'code': 'no', 'name': 'Norwegian (Norsk)'},
+      {'code': 'hu', 'name': 'Hungarian (Magyar)'},
+      {'code': 'he', 'name': 'Hebrew (עברית)'},
+      {'code': 'fa', 'name': 'Persian (فارسی)'},
+      {'code': 'af', 'name': 'Afrikaans'},
+      {'code': 'sq', 'name': 'Albanian (Shqip)'},
+      {'code': 'sw', 'name': 'Swahili (Kiswahili)'},
+      {'code': 'ne', 'name': 'Nepali (नेपाली)'},
+    ];
+  }
+
+  // Widget for translated text
+  Widget _buildTranslatedText(
+    String text, {
+    TextStyle? style,
+    TextAlign? textAlign,
+    int? maxLines,
+    TextOverflow? overflow,
+  }) {
+    return FutureBuilder<String>(
+      future: _translate(text),
+      initialData: text,
+      builder: (context, snapshot) {
+        return Text(
+          snapshot.data ?? text,
+          style: style,
+          textAlign: textAlign,
+          maxLines: maxLines,
+          overflow: overflow,
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1075,30 +1403,40 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                     ),
                   ),
                   const SizedBox(width: 12),
-                  const Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        "GarbhSuraksha",
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _buildTranslatedText(
+                          "GarbhSuraksha",
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
-                      ),
-                      Text(
-                        "Maternal Health Monitoring",
-                        style: TextStyle(
-                          color: Colors.white70,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w400,
+                        _buildTranslatedText(
+                          "Maternal Health Monitoring",
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w400,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ],
               ),
               elevation: 2,
+              actions: [
+                IconButton(
+                  icon: const Icon(Icons.translate, color: Colors.white),
+                  tooltip: 'Change Language',
+                  onPressed: _showLanguageSelector,
+                ),
+                const SizedBox(width: 8),
+              ],
             ),
       drawer: _isLoading
           ? null
@@ -1134,9 +1472,9 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                           ),
                         ),
                         const SizedBox(height: 15),
-                        const Text(
+                        _buildTranslatedText(
                           "GarbhSuraksha",
-                          style: TextStyle(
+                          style: const TextStyle(
                             color: Colors.white,
                             fontSize: 22,
                             fontWeight: FontWeight.w600,
@@ -1144,9 +1482,9 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                           ),
                         ),
                         const SizedBox(height: 5),
-                        const Text(
+                        _buildTranslatedText(
                           "Fetal Monitoring System",
-                          style: TextStyle(
+                          style: const TextStyle(
                             color: Colors.white70,
                             fontSize: 13,
                             fontWeight: FontWeight.w400,
@@ -1161,9 +1499,9 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                       Icons.dashboard_outlined,
                       color: Color(0xFF2C6E91),
                     ),
-                    title: const Text(
+                    title: _buildTranslatedText(
                       "Dashboard",
-                      style: TextStyle(fontWeight: FontWeight.w500),
+                      style: const TextStyle(fontWeight: FontWeight.w500),
                     ),
                     onTap: () {
                       Navigator.pop(context);
@@ -1175,9 +1513,9 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                       Icons.calendar_today_outlined,
                       color: Color(0xFF2C6E91),
                     ),
-                    title: const Text(
+                    title: _buildTranslatedText(
                       "Appointments",
-                      style: TextStyle(fontWeight: FontWeight.w500),
+                      style: const TextStyle(fontWeight: FontWeight.w500),
                     ),
                     onTap: () {
                       Navigator.pop(context);
@@ -1188,9 +1526,9 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                       Icons.medical_services_outlined,
                       color: Color(0xFF2C6E91),
                     ),
-                    title: const Text(
+                    title: _buildTranslatedText(
                       "Medical Records",
-                      style: TextStyle(fontWeight: FontWeight.w500),
+                      style: const TextStyle(fontWeight: FontWeight.w500),
                     ),
                     onTap: () {
                       Navigator.pop(context);
@@ -1201,9 +1539,9 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                       Icons.notifications_outlined,
                       color: Color(0xFF2C6E91),
                     ),
-                    title: const Text(
+                    title: _buildTranslatedText(
                       "Reminders",
-                      style: TextStyle(fontWeight: FontWeight.w500),
+                      style: const TextStyle(fontWeight: FontWeight.w500),
                     ),
                     onTap: () {
                       Navigator.pop(context);
@@ -1215,9 +1553,9 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                       Icons.settings_outlined,
                       color: Color(0xFF2C6E91),
                     ),
-                    title: const Text(
+                    title: _buildTranslatedText(
                       "Settings",
-                      style: TextStyle(fontWeight: FontWeight.w500),
+                      style: const TextStyle(fontWeight: FontWeight.w500),
                     ),
                     onTap: () {
                       Navigator.pop(context);
@@ -1228,20 +1566,20 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                       Icons.help_outline,
                       color: Color(0xFF2C6E91),
                     ),
-                    title: const Text(
+                    title: _buildTranslatedText(
                       "Help & Support",
-                      style: TextStyle(fontWeight: FontWeight.w500),
+                      style: const TextStyle(fontWeight: FontWeight.w500),
                     ),
                     onTap: () {
                       Navigator.pop(context);
                     },
                   ),
                   const Spacer(),
-                  const Padding(
-                    padding: EdgeInsets.all(20.0),
-                    child: Text(
+                  Padding(
+                    padding: const EdgeInsets.all(20.0),
+                    child: _buildTranslatedText(
                       "Version 1.0.0",
-                      style: TextStyle(color: Colors.grey, fontSize: 12),
+                      style: const TextStyle(color: Colors.grey, fontSize: 12),
                     ),
                   ),
                 ],
@@ -1283,9 +1621,9 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                       ),
                       const SizedBox(height: 25),
                       // Clinical Title
-                      const Text(
+                      _buildTranslatedText(
                         "Smart Fetal Heart Rate Monitor",
-                        style: TextStyle(
+                        style: const TextStyle(
                           fontSize: 24,
                           fontWeight: FontWeight.w600,
                           color: Color(0xFF1A1A1A),
@@ -1293,9 +1631,9 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                         ),
                       ),
                       const SizedBox(height: 8),
-                      const Text(
+                      _buildTranslatedText(
                         "Enter current gestational week for fetal heart rate monitoring",
-                        style: TextStyle(
+                        style: const TextStyle(
                           fontSize: 14,
                           color: Color(0xFF6B7280),
                           fontWeight: FontWeight.w400,
@@ -1325,9 +1663,9 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text(
+                            _buildTranslatedText(
                               "Gestational Week",
-                              style: TextStyle(
+                              style: const TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w600,
                                 color: Color(0xFF374151),
@@ -1438,19 +1776,25 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                   ),
                                   elevation: 0,
                                 ),
-                                child: const Row(
+                                child: Row(
                                   mainAxisAlignment: MainAxisAlignment.center,
                                   children: [
-                                    Text(
-                                      "Continue Assessment",
-                                      style: TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w600,
-                                        letterSpacing: 0.3,
-                                      ),
+                                    FutureBuilder<String>(
+                                      future: _translate("Continue Assessment"),
+                                      initialData: "Continue Assessment",
+                                      builder: (context, snapshot) {
+                                        return Text(
+                                          snapshot.data ?? "Continue Assessment",
+                                          style: const TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w600,
+                                            letterSpacing: 0.3,
+                                          ),
+                                        );
+                                      },
                                     ),
-                                    SizedBox(width: 8),
-                                    Icon(Icons.arrow_forward, size: 18),
+                                    const SizedBox(width: 8),
+                                    const Icon(Icons.arrow_forward, size: 18),
                                   ],
                                 ),
                               ),
@@ -1483,22 +1827,28 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    const Text(
+                                    _buildTranslatedText(
                                       "Validation Error",
-                                      style: TextStyle(
+                                      style: const TextStyle(
                                         fontSize: 14,
                                         fontWeight: FontWeight.w600,
                                         color: Color(0xFF991B1B),
                                       ),
                                     ),
                                     const SizedBox(height: 4),
-                                    Text(
-                                      _errorMessage,
-                                      style: const TextStyle(
-                                        fontSize: 13,
-                                        color: Color(0xFF991B1B),
-                                        height: 1.4,
-                                      ),
+                                    FutureBuilder<String>(
+                                      future: _translate(_errorMessage),
+                                      initialData: _errorMessage,
+                                      builder: (context, snapshot) {
+                                        return Text(
+                                          snapshot.data ?? _errorMessage,
+                                          style: const TextStyle(
+                                            fontSize: 13,
+                                            color: Color(0xFF991B1B),
+                                            height: 1.4,
+                                          ),
+                                        );
+                                      },
                                     ),
                                   ],
                                 ),
@@ -1536,9 +1886,9 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                     ),
                                   ),
                                   const SizedBox(width: 12),
-                                  const Text(
+                                  _buildTranslatedText(
                                     "Assessment Confirmed",
-                                    style: TextStyle(
+                                    style: const TextStyle(
                                       fontSize: 16,
                                       fontWeight: FontWeight.w600,
                                       color: Color(0xFF065F46),
@@ -1563,22 +1913,28 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                 child: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    const Text(
+                                    _buildTranslatedText(
                                       "Current Gestation:",
-                                      style: TextStyle(
+                                      style: const TextStyle(
                                         fontSize: 14,
                                         color: Color(0xFF6B7280),
                                         fontWeight: FontWeight.w500,
                                       ),
                                     ),
                                     const SizedBox(width: 8),
-                                    Text(
-                                      "$_gestationPeriod Weeks",
-                                      style: const TextStyle(
-                                        fontSize: 20,
-                                        fontWeight: FontWeight.w700,
-                                        color: Color(0xFF065F46),
-                                      ),
+                                    FutureBuilder<String>(
+                                      future: _translate("$_gestationPeriod Weeks"),
+                                      initialData: "$_gestationPeriod Weeks",
+                                      builder: (context, snapshot) {
+                                        return Text(
+                                          snapshot.data ?? "$_gestationPeriod Weeks",
+                                          style: const TextStyle(
+                                            fontSize: 20,
+                                            fontWeight: FontWeight.w700,
+                                            color: Color(0xFF065F46),
+                                          ),
+                                        );
+                                      },
                                     ),
                                   ],
                                 ),
@@ -1628,24 +1984,24 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                     ),
                                   ),
                                   const SizedBox(width: 14),
-                                  const Expanded(
+                                  Expanded(
                                     child: Column(
                                       crossAxisAlignment:
                                           CrossAxisAlignment.start,
                                       children: [
-                                        Text(
+                                        _buildTranslatedText(
                                           "Fetal Heart Sound Recording",
-                                          style: TextStyle(
+                                          style: const TextStyle(
                                             fontSize: 17,
                                             fontWeight: FontWeight.w600,
                                             color: Color(0xFF1A1A1A),
                                             letterSpacing: 0.2,
                                           ),
                                         ),
-                                        SizedBox(height: 4),
-                                        Text(
+                                        const SizedBox(height: 4),
+                                        _buildTranslatedText(
                                           "Record or upload fetal heartbeat audio",
-                                          style: TextStyle(
+                                          style: const TextStyle(
                                             fontSize: 13,
                                             color: Color(0xFF6B7280),
                                             fontWeight: FontWeight.w400,
@@ -1785,12 +2141,20 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                             : Icons.mic_none,
                                         size: 22,
                                       ),
-                                      label: Text(
-                                        _isRecording ? "Stop" : "Record Audio",
-                                        style: const TextStyle(
-                                          fontSize: 15,
-                                          fontWeight: FontWeight.w600,
+                                      label: FutureBuilder<String>(
+                                        future: _translate(
+                                          _isRecording ? "Stop" : "Record Audio",
                                         ),
+                                        initialData: _isRecording ? "Stop" : "Record Audio",
+                                        builder: (context, snapshot) {
+                                          return Text(
+                                            snapshot.data ?? (_isRecording ? "Stop" : "Record Audio"),
+                                            style: const TextStyle(
+                                              fontSize: 15,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          );
+                                        },
                                       ),
                                       style: ElevatedButton.styleFrom(
                                         backgroundColor: _isRecording
@@ -1820,12 +2184,18 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                         Icons.upload_file,
                                         size: 22,
                                       ),
-                                      label: const Text(
-                                        "Upload File",
-                                        style: TextStyle(
-                                          fontSize: 15,
-                                          fontWeight: FontWeight.w600,
-                                        ),
+                                      label: FutureBuilder<String>(
+                                        future: _translate("Upload File"),
+                                        initialData: "Upload File",
+                                        builder: (context, snapshot) {
+                                          return Text(
+                                            snapshot.data ?? "Upload File",
+                                            style: const TextStyle(
+                                              fontSize: 15,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          );
+                                        },
                                       ),
                                       style: OutlinedButton.styleFrom(
                                         foregroundColor: const Color(
@@ -1923,12 +2293,18 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                                 Icons.download_outlined,
                                                 size: 18,
                                               ),
-                                              label: const Text(
-                                                "Download",
-                                                style: TextStyle(
-                                                  fontSize: 14,
-                                                  fontWeight: FontWeight.w600,
-                                                ),
+                                              label: FutureBuilder<String>(
+                                                future: _translate("Download"),
+                                                initialData: "Download",
+                                                builder: (context, snapshot) {
+                                                  return Text(
+                                                    snapshot.data ?? "Download",
+                                                    style: const TextStyle(
+                                                      fontSize: 14,
+                                                      fontWeight: FontWeight.w600,
+                                                    ),
+                                                  );
+                                                },
                                               ),
                                               style: ElevatedButton.styleFrom(
                                                 backgroundColor: const Color(
@@ -1976,14 +2352,27 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                                       Icons.analytics_outlined,
                                                       size: 18,
                                                     ),
-                                              label: Text(
-                                                _isAnalyzing
+                                              label: FutureBuilder<String>(
+                                                future: _translate(
+                                                  _isAnalyzing
+                                                      ? "Processing..."
+                                                      : "AI Overview",
+                                                ),
+                                                initialData: _isAnalyzing
                                                     ? "Processing..."
                                                     : "AI Overview",
-                                                style: const TextStyle(
-                                                  fontSize: 14,
-                                                  fontWeight: FontWeight.w600,
-                                                ),
+                                                builder: (context, snapshot) {
+                                                  return Text(
+                                                    snapshot.data ??
+                                                        (_isAnalyzing
+                                                            ? "Processing..."
+                                                            : "AI Overview"),
+                                                    style: const TextStyle(
+                                                      fontSize: 14,
+                                                      fontWeight: FontWeight.w600,
+                                                    ),
+                                                  );
+                                                },
                                               ),
                                               style: ElevatedButton.styleFrom(
                                                 backgroundColor: const Color(
@@ -2025,12 +2414,18 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                                 Icons.mic_none,
                                                 size: 18,
                                               ),
-                                              label: const Text(
-                                                "New Recording",
-                                                style: TextStyle(
-                                                  fontSize: 14,
-                                                  fontWeight: FontWeight.w600,
-                                                ),
+                                              label: FutureBuilder<String>(
+                                                future: _translate("New Recording"),
+                                                initialData: "New Recording",
+                                                builder: (context, snapshot) {
+                                                  return Text(
+                                                    snapshot.data ?? "New Recording",
+                                                    style: const TextStyle(
+                                                      fontSize: 14,
+                                                      fontWeight: FontWeight.w600,
+                                                    ),
+                                                  );
+                                                },
                                               ),
                                               style: OutlinedButton.styleFrom(
                                                 foregroundColor: const Color(
@@ -2058,15 +2453,31 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                                 showDialog(
                                                   context: context,
                                                   builder: (context) => AlertDialog(
-                                                    title: const Text(
-                                                      'Cancel Recording',
-                                                      style: TextStyle(
-                                                        fontWeight:
-                                                            FontWeight.w600,
-                                                      ),
+                                                    title: FutureBuilder<String>(
+                                                      future: _translate('Cancel Recording'),
+                                                      initialData: 'Cancel Recording',
+                                                      builder: (context, snapshot) {
+                                                        return Text(
+                                                          snapshot.data ?? 'Cancel Recording',
+                                                          style: const TextStyle(
+                                                            fontWeight:
+                                                                FontWeight.w600,
+                                                          ),
+                                                        );
+                                                      },
                                                     ),
-                                                    content: const Text(
-                                                      'Are you sure you want to cancel this recording? This action cannot be undone.',
+                                                    content: FutureBuilder<String>(
+                                                      future: _translate(
+                                                        'Are you sure you want to cancel this recording? This action cannot be undone.',
+                                                      ),
+                                                      initialData:
+                                                        'Are you sure you want to cancel this recording? This action cannot be undone.',
+                                                      builder: (context, snapshot) {
+                                                        return Text(
+                                                          snapshot.data ??
+                                                            'Are you sure you want to cancel this recording? This action cannot be undone.',
+                                                        );
+                                                      },
                                                     ),
                                                     shape: RoundedRectangleBorder(
                                                       borderRadius:
@@ -2080,13 +2491,19 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                                             Navigator.pop(
                                                               context,
                                                             ),
-                                                        child: const Text(
-                                                          'Keep Recording',
-                                                          style: TextStyle(
-                                                            color: Color(
-                                                              0xFF6B7280,
-                                                            ),
-                                                          ),
+                                                        child: FutureBuilder<String>(
+                                                          future: _translate('Keep Recording'),
+                                                          initialData: 'Keep Recording',
+                                                          builder: (context, snapshot) {
+                                                            return Text(
+                                                              snapshot.data ?? 'Keep Recording',
+                                                              style: const TextStyle(
+                                                                color: Color(
+                                                                  0xFF6B7280,
+                                                                ),
+                                                              ),
+                                                            );
+                                                          },
                                                         ),
                                                       ),
                                                       ElevatedButton(
@@ -2102,23 +2519,25 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                                             _audioFileBytes =
                                                                 null;
                                                           });
-                                                          ScaffoldMessenger.of(
-                                                            context,
-                                                          ).showSnackBar(
-                                                            const SnackBar(
-                                                              content: Text(
-                                                                'Recording cancelled',
+                                                          _translate('Recording cancelled').then((translated) {
+                                                            ScaffoldMessenger.of(
+                                                              context,
+                                                            ).showSnackBar(
+                                                              SnackBar(
+                                                                content: Text(
+                                                                  translated,
+                                                                ),
+                                                                backgroundColor:
+                                                                    const Color(
+                                                                      0xFF6B7280,
+                                                                    ),
+                                                                duration:
+                                                                    const Duration(
+                                                                      seconds: 2,
+                                                                    ),
                                                               ),
-                                                              backgroundColor:
-                                                                  Color(
-                                                                    0xFF6B7280,
-                                                                  ),
-                                                              duration:
-                                                                  Duration(
-                                                                    seconds: 2,
-                                                                  ),
-                                                            ),
-                                                          );
+                                                            );
+                                                          });
                                                         },
                                                         style: ElevatedButton.styleFrom(
                                                           backgroundColor:
@@ -2134,8 +2553,14 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                                                                 ),
                                                           ),
                                                         ),
-                                                        child: const Text(
-                                                          'Cancel Recording',
+                                                        child: FutureBuilder<String>(
+                                                          future: _translate('Cancel Recording'),
+                                                          initialData: 'Cancel Recording',
+                                                          builder: (context, snapshot) {
+                                                            return Text(
+                                                              snapshot.data ?? 'Cancel Recording',
+                                                            );
+                                                          },
                                                         ),
                                                       ),
                                                     ],
@@ -2217,33 +2642,24 @@ class _GarbhSurakshaState extends State<GarbhSuraksha>
                           ],
                         ),
                         padding: const EdgeInsets.all(24),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(12),
-                          child: Image.network(
-                            'https://static.vecteezy.com/system/resources/thumbnails/000/585/705/small/5-08.jpg',
-                            fit: BoxFit.contain,
-                            loadingBuilder: (context, child, loadingProgress) {
-                              if (loadingProgress == null) return child;
-                              return Center(
-                                child: CircularProgressIndicator(
-                                  value: loadingProgress.expectedTotalBytes != null
-                                      ? loadingProgress.cumulativeBytesLoaded /
-                                          loadingProgress.expectedTotalBytes!
-                                      : null,
-                                  color: const Color(0xFF6366F1),
-                                ),
-                              );
-                            },
-                            errorBuilder: (context, error, stackTrace) {
-                              // If network image fails, try to show a fallback image
-                              return const Center(
-                                child: Icon(
-                                  Icons.local_hospital,
-                                  size: 100,
-                                  color: Color(0xFF2C6E91),
-                                ),
-                              );
-                            },
+                        child: Container(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [
+                                const Color(0xFF6366F1).withValues(alpha: 0.1),
+                                const Color(0xFF8B5CF6).withValues(alpha: 0.1),
+                              ],
+                            ),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Center(
+                            child: Icon(
+                              Icons.pregnant_woman,
+                              size: 100,
+                              color: Color(0xFF6366F1),
+                            ),
                           ),
                         ),
                       ),
